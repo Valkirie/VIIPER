@@ -1,6 +1,7 @@
 package steamcontroller
 
 import (
+	"context"
 	"encoding/binary"
 	"sync"
 
@@ -131,11 +132,11 @@ func New(o *device.CreateOptions) (*SteamController, error) {
 		controller: newControllerState(),
 	}
 	if o != nil {
-		if o.IdVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IdVendor
+		if o.IDVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IDVendor
 		}
-		if o.IdProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IdProduct
+		if o.IDProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IDProduct
 		}
 	}
 	return d, nil
@@ -205,7 +206,7 @@ func (d *SteamController) buildInputReport(st InputState, frame uint32) []byte {
 	return report
 }
 
-func (d *SteamController) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
+func (d *SteamController) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
 	if dir == usbip.DirIn {
 		switch ep {
 		case mouseEndpointNumber:
@@ -549,7 +550,7 @@ func (d *SteamController) GetDeviceSpecificArgs() map[string]any {
 	return map[string]any{}
 }
 
-var reportDescriptor = hid.Report{
+var reportDescriptor = hid.ReportDescriptor{
 	Items: []hid.Item{
 		hid.UsagePage{Page: 0xff00},
 		hid.Usage{Usage: 0x01},
@@ -570,7 +571,7 @@ var reportDescriptor = hid.Report{
 	},
 }
 
-var mouseReportDescriptor = hid.Report{
+var mouseReportDescriptor = hid.ReportDescriptor{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageMouse},
@@ -602,7 +603,7 @@ var mouseReportDescriptor = hid.Report{
 	},
 }
 
-var keyboardReportDescriptor = hid.Report{
+var keyboardReportDescriptor = hid.ReportDescriptor{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageKeyboard},
@@ -640,14 +641,14 @@ var keyboardReportDescriptor = hid.Report{
 	},
 }
 
-func makeHIDFunction(report hid.Report) *usb.HIDFunction {
+func makeHIDFunction(report hid.ReportDescriptor) *usb.HIDFunction {
 	return &usb.HIDFunction{
 		Descriptor: usb.HIDDescriptor{
 			BcdHID:       0x0111,
 			BCountryCode: 0x00,
 			Descriptors:  []usb.HIDSubDescriptor{{Type: usb.ReportDescType}},
 		},
-		Report: report,
+		ReportDescriptor: report,
 	}
 }
 
@@ -667,7 +668,7 @@ var defaultDescriptor = usb.Descriptor{
 		BNumConfigurations: 0x01,
 		Speed:              2,
 	},
-	Config: usb.ConfigHeader{
+	Configuration: usb.ConfigurationDescriptor{
 		BConfigurationValue: 0x01,
 		BMAttributes:        0xa0,
 		BMaxPower:           250,

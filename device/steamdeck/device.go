@@ -1,6 +1,7 @@
 package steamdeck
 
 import (
+	"context"
 	"encoding/binary"
 	"sync"
 
@@ -47,10 +48,10 @@ type controllerState struct {
 }
 
 var defaultSettings = map[uint8]uint16{
-	SettingLeftTrackpadMode:           TrackpadModeNone,
-	SettingRightTrackpadMode:          TrackpadModeNone,
-	SettingLizardMode:                 LizardModeOff,
-	SettingSmoothAbsoluteMouse:        0,
+	SettingLeftTrackpadMode:    TrackpadModeNone,
+	SettingRightTrackpadMode:   TrackpadModeNone,
+	SettingLizardMode:          LizardModeOff,
+	SettingSmoothAbsoluteMouse: 0,
 	// Advertise raw gyro + raw accel only (no SendOrientation): we don't compute a live
 	// orientation quaternion, so claiming orientation made Steam lean on a frozen identity
 	// quat and ignore our raw angular velocity (gyro-to-stick collapsed to center). This
@@ -113,11 +114,11 @@ func New(o *device.CreateOptions) (*SteamDeck, error) {
 		controller: newControllerState(),
 	}
 	if o != nil {
-		if o.IdVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IdVendor
+		if o.IDVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IDVendor
 		}
-		if o.IdProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IdProduct
+		if o.IDProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IDProduct
 		}
 	}
 	return d, nil
@@ -149,7 +150,7 @@ func (d *SteamDeck) snapshotInputState() InputState {
 	return *d.inputState
 }
 
-func (d *SteamDeck) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
+func (d *SteamDeck) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
 	if dir == usbip.DirIn {
 		switch ep {
 		case mouseEndpointNumber:
@@ -422,7 +423,7 @@ func (d *SteamDeck) GetDeviceSpecificArgs() map[string]any {
 	return map[string]any{"profile": DefaultProfile}
 }
 
-var reportDescriptor = hid.Report{
+var reportDescriptor = hid.ReportDescriptor{
 	Items: []hid.Item{
 		hid.UsagePage{Page: 0xffff},
 		hid.Usage{Usage: 0x01},
@@ -445,7 +446,7 @@ var reportDescriptor = hid.Report{
 	},
 }
 
-var mouseReportDescriptor = hid.Report{
+var mouseReportDescriptor = hid.ReportDescriptor{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageMouse},
@@ -477,7 +478,7 @@ var mouseReportDescriptor = hid.Report{
 	},
 }
 
-var keyboardReportDescriptor = hid.Report{
+var keyboardReportDescriptor = hid.ReportDescriptor{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageKeyboard},
@@ -515,14 +516,14 @@ var keyboardReportDescriptor = hid.Report{
 	},
 }
 
-func makeHIDFunction(report hid.Report) *usb.HIDFunction {
+func makeHIDFunction(report hid.ReportDescriptor) *usb.HIDFunction {
 	return &usb.HIDFunction{
 		Descriptor: usb.HIDDescriptor{
 			BcdHID:       0x0111,
 			BCountryCode: 0x00,
 			Descriptors:  []usb.HIDSubDescriptor{{Type: usb.ReportDescType}},
 		},
-		Report: report,
+		ReportDescriptor: report,
 	}
 }
 
@@ -542,7 +543,7 @@ var defaultDescriptor = usb.Descriptor{
 		BNumConfigurations: 0x01,
 		Speed:              2,
 	},
-	Config: usb.ConfigHeader{
+	Configuration: usb.ConfigurationDescriptor{
 		BConfigurationValue: 0x01,
 		BMAttributes:        0xa0,
 		BMaxPower:           250,
