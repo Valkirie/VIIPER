@@ -8,4 +8,5 @@ import (
 	_ "github.com/Alia5/VIIPER/device/ns2pro"
 	_ "github.com/Alia5/VIIPER/device/xbox360"
 	_ "github.com/Alia5/VIIPER/device/steamcontroller"
+	_ "github.com/Alia5/VIIPER/device/steamdeck"
 )
