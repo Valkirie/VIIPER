@@ -58,10 +58,6 @@ func (x *Xbox360) SetRumbleCallback(f func(XRumbleState)) {
 
 // UpdateInputState updates the device's current input state (thread-safe).
 func (x *Xbox360) UpdateInputState(state InputState) {
-	select {
-	case <-x.inputCh:
-	default:
-	}
 	x.inputCh <- state
 }
 

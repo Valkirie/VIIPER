@@ -24,6 +24,7 @@ type DualShock4 struct {
 	outputFunc func(OutputState)
 	descriptor usb.Descriptor
 
+	reportBuf           [64]byte // Pre-allocated HID report buffer
 	probeSelector       [3]byte
 	telemetrySubcommand byte
 
@@ -111,10 +112,6 @@ func (d *DualShock4) UpdateInputState(state *InputState) {
 	d.mtx.Lock()
 	d.inputState = state
 	d.mtx.Unlock()
-	select {
-	case <-d.inputCh:
-	default:
-	}
 	d.inputCh <- state
 }
 
@@ -432,7 +429,7 @@ func (d *DualShock4) buildCalibrationReport(id byte) []byte {
 }
 
 func (d *DualShock4) buildUSBInputReport(s *InputState, m *MetaState) []byte {
-	b := make([]byte, InputReportSize)
+	b := d.reportBuf[:]
 
 	b[0] = ReportIDInput
 

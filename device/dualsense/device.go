@@ -25,6 +25,7 @@ type DualSense struct {
 	outputFunc func(OutputState)
 	descriptor usb.Descriptor
 
+	reportBuf  [64]byte // Pre-allocated HID report buffer
 	subcommand [2]byte
 
 	seqCounter    uint8
@@ -133,10 +134,6 @@ func (d *DualSense) UpdateInputState(state *InputState) {
 	d.mtx.Lock()
 	d.inputState = state
 	d.mtx.Unlock()
-	select {
-	case <-d.inputCh:
-	default:
-	}
 	d.inputCh <- state
 }
 
@@ -394,7 +391,7 @@ func (d *DualSense) featureReportCommandResponse() []byte {
 }
 
 func (d *DualSense) buildUSBInputReport(s *InputState, m *MetaState) []byte {
-	b := make([]byte, InputReportSize)
+	b := d.reportBuf[:]
 
 	b[0] = ReportIDInput
 

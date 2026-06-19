@@ -20,6 +20,7 @@ type Keyboard struct {
 	ledState    uint8
 	ledCallback func(LEDState)
 	descriptor  usb.Descriptor
+	reportBuf   [34]byte // Pre-allocated HID report buffer
 }
 
 // New returns a new Keyboard device.
@@ -60,10 +61,6 @@ func (k *Keyboard) GetLEDState() LEDState {
 
 // UpdateInputState updates the device's current input state (thread-safe).
 func (k *Keyboard) UpdateInputState(state InputState) {
-	select {
-	case <-k.inputCh:
-	default:
-	}
 	k.inputCh <- state
 }
 
@@ -77,7 +74,7 @@ func (k *Keyboard) HandleTransfer(ctx context.Context, ep uint32, dir uint32, ou
 			case <-ctx.Done():
 				return nil
 			case st := <-k.inputCh:
-				return st.BuildReport()
+				return st.BuildReport(k.reportBuf)
 			}
 		default:
 			return nil

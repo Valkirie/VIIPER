@@ -47,8 +47,8 @@ func (ls *LEDState) UnmarshalBinary(data []byte) error {
 //	Byte 0: Modifiers (8 bits)
 //	Byte 1: Reserved (0x00)
 //	Bytes 2-33: Key bitmap (256 bits, 32 bytes)
-func (kb *InputState) BuildReport() []byte {
-	b := make([]byte, 34)
+func (kb *InputState) BuildReport(buf [34]byte) []byte {
+	b := buf[:]
 	b[0] = kb.Modifiers
 	b[1] = 0x00 // Reserved
 	copy(b[2:34], kb.KeyBitmap[:])
