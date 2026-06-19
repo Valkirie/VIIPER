@@ -676,7 +676,8 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 				}
 			}
 			return nil
-		default:
+		case <-time.After(10 * time.Millisecond):
+			// Check for context cancellation periodically to prevent busy-wait
 		}
 
 		var hdr [urbHdrSize]byte
@@ -766,6 +767,7 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 							respData = cached
 							break
 						}
+						time.Sleep(time.Millisecond)
 						continue
 					}
 					// Device answered "no data" without blocking.
