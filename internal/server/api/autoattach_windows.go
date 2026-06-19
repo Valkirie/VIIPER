@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"unsafe"
@@ -49,8 +51,10 @@ var deviceGUID = windows.GUID{
 }
 
 const (
-	niMaxHost = 1025
-	niMaxServ = 32
+	niMaxHost          = 1025
+	niMaxServ          = 32
+	serialBufSize      = 16
+	usbipExecutableEnv = "VIIPER_USBIP_EXE"
 )
 
 // PLUGIN_HARDWARE structure from usbip-win2
@@ -60,6 +64,7 @@ type attachIOCTL struct {
 	BusID      [32]byte
 	Service    [niMaxServ]byte
 	Host       [niMaxHost]byte
+	Serial     [serialBufSize]byte
 }
 
 const (
@@ -168,9 +173,15 @@ func attachViaIOCTL(_ context.Context, deviceExportMeta *usbip.ExportMeta, usbip
 func attachViaCommand(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usbipServerPort uint16, logger *slog.Logger) error {
 	logger.Info("Auto-attaching localhost client", "busID", deviceExportMeta.BusID, "deviceID", deviceExportMeta.DevID)
 
+	usbipPath, err := resolveUsbipExecutable()
+	if err != nil {
+		logger.Error("Failed to locate usbip executable", "error", err)
+		return err
+	}
+
 	cmd := exec.CommandContext(
 		ctx,
-		"usbip",
+		usbipPath,
 		"--tcp-port",
 		strconv.FormatUint(uint64(usbipServerPort), 10),
 		"attach",
@@ -181,6 +192,7 @@ func attachViaCommand(ctx context.Context, deviceExportMeta *usbip.ExportMeta, u
 	if err != nil {
 		logger.Error("Failed to attach device",
 			"error", err,
+			"usbip", usbipPath,
 			"port", usbipServerPort,
 			"output", string(output))
 		return err
@@ -281,14 +293,58 @@ func CheckAutoAttachPrerequisites(useNativeIOCTL bool, logger *slog.Logger) bool
 		return true
 	}
 
-	if _, err := exec.LookPath("usbip.exe"); err != nil {
-		logger.Warn("USB/IP tool 'usbip.exe' not found in PATH")
+	if _, err := resolveUsbipExecutable(); err != nil {
+		logger.Warn("USB/IP tool not found", "error", err)
 		logger.Warn("Auto-attach requires usbip-win2")
 		logger.Info("Download and install usbip-win2:")
 		logger.Info("  https://github.com/vadimgrn/usbip-win2")
 		return false
 	}
 
-	logger.Debug("usbip.exe tool found in PATH")
+	logger.Debug("usbip executable found")
 	return true
+}
+
+func resolveUsbipExecutable() (string, error) {
+	if explicit := os.Getenv(usbipExecutableEnv); explicit != "" {
+		if path, err := resolveUsbipCandidate(explicit); err == nil {
+			return path, nil
+		} else {
+			return "", fmt.Errorf("%s=%q: %w", usbipExecutableEnv, explicit, err)
+		}
+	}
+
+	for _, candidate := range usbipExecutableCandidates() {
+		if path, err := resolveUsbipCandidate(candidate); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", fmt.Errorf("usbip.exe not found; set %s or install usbip-win2", usbipExecutableEnv)
+}
+
+func usbipExecutableCandidates() []string {
+	candidates := make([]string, 0, 4)
+
+	if programFiles := os.Getenv("ProgramFiles"); programFiles != "" {
+		candidates = append(candidates, filepath.Join(programFiles, "USBip", "usbip.exe"))
+	}
+	if programFilesX86 := os.Getenv("ProgramFiles(x86)"); programFilesX86 != "" {
+		candidates = append(candidates, filepath.Join(programFilesX86, "USBip", "usbip.exe"))
+	}
+
+	candidates = append(candidates, "usbip.exe", "usbip")
+	return candidates
+}
+
+func resolveUsbipCandidate(candidate string) (string, error) {
+	if filepath.IsAbs(candidate) {
+		if _, err := os.Stat(candidate); err != nil {
+			return "", err
+		}
+
+		return candidate, nil
+	}
+
+	return exec.LookPath(candidate)
 }
