@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"sync"
-	"sync/atomic"
 
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/usb"
@@ -29,8 +28,8 @@ var zeroKeyboardReport = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 type SteamDeck struct {
 	inputState          *InputState
-	stateMu             sync.Mutex
-	featureMu           sync.Mutex
+	mtx                 sync.Mutex
+	featureMtx          sync.Mutex
 	outputFunc          func(OutputState)
 	frame               uint32
 	descriptor          usb.Descriptor
@@ -130,15 +129,25 @@ func (d *SteamDeck) SetOutputCallback(f func(OutputState)) {
 }
 
 func (d *SteamDeck) UpdateInputState(state *InputState) {
-	d.stateMu.Lock()
-	defer d.stateMu.Unlock()
+	d.setInputState(state)
+}
+
+func (d *SteamDeck) setInputState(state *InputState) {
 	if state == nil {
-		d.inputState = &InputState{}
-		return
+		state = &InputState{}
 	}
-	st := *state
-	st.Frame = atomic.AddUint32(&d.frame, 1)
-	d.inputState = &st
+	updated := *state
+	d.mtx.Lock()
+	d.frame++
+	updated.Frame = d.frame
+	d.inputState = &updated
+	d.mtx.Unlock()
+}
+
+func (d *SteamDeck) snapshotInputState() InputState {
+	d.mtx.Lock()
+	defer d.mtx.Unlock()
+	return *d.inputState
 }
 
 func (d *SteamDeck) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
@@ -149,9 +158,7 @@ func (d *SteamDeck) HandleTransfer(ctx context.Context, ep uint32, dir uint32, o
 		case keyboardEndpointNumber:
 			return append([]byte(nil), zeroKeyboardReport...)
 		case controllerEndpointNumber:
-			d.stateMu.Lock()
-			st := *d.inputState
-			d.stateMu.Unlock()
+			st := d.snapshotInputState()
 			return st.buildReport(st.Frame, DeckInputPayloadLen)
 		default:
 			return nil
@@ -179,9 +186,7 @@ func (d *SteamDeck) HandleControl(bmRequestType, bRequest uint8, wValue, _ /* wI
 	if bmRequestType == 0xa1 && bRequest == hidGetReport {
 		switch reportType {
 		case reportTypeInput:
-			d.stateMu.Lock()
-			st := *d.inputState
-			d.stateMu.Unlock()
+			st := d.snapshotInputState()
 			report := st.buildReport(st.Frame, DeckInputPayloadLen)
 			if wLength > 0 && int(wLength) < len(report) {
 				return report[:wLength], true
@@ -285,8 +290,8 @@ func (d *SteamDeck) applySettings(data []byte) {
 }
 
 func (d *SteamDeck) getFeatureResponse(reportID uint8) []byte {
-	d.featureMu.Lock()
-	defer d.featureMu.Unlock()
+	d.featureMtx.Lock()
+	defer d.featureMtx.Unlock()
 	if reportID != 0 {
 		return d.featureResponse([]byte{reportID})
 	}
@@ -297,8 +302,8 @@ func (d *SteamDeck) getFeatureResponse(reportID uint8) []byte {
 }
 
 func (d *SteamDeck) setFeatureResponse(request []byte) {
-	d.featureMu.Lock()
-	defer d.featureMu.Unlock()
+	d.featureMtx.Lock()
+	defer d.featureMtx.Unlock()
 	resp := d.featureResponse(request)
 	if resp == nil {
 		d.lastFeatureResponse = nil

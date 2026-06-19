@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"sync"
-	"sync/atomic"
 
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/usb"
@@ -62,8 +61,8 @@ const (
 
 type SteamController struct {
 	inputState          *InputState
-	stateMu             sync.Mutex
-	featureMu           sync.Mutex
+	mtx                 sync.Mutex
+	featureMtx          sync.Mutex
 	outputFunc          func(OutputState)
 	frame               uint32
 	descriptor          usb.Descriptor
@@ -163,15 +162,25 @@ func (d *SteamController) SetOutputCallback(f func(OutputState)) {
 }
 
 func (d *SteamController) UpdateInputState(state *InputState) {
-	d.stateMu.Lock()
-	defer d.stateMu.Unlock()
+	d.setInputState(state)
+}
+
+func (d *SteamController) setInputState(state *InputState) {
 	if state == nil {
-		d.inputState = &InputState{}
-		return
+		state = &InputState{}
 	}
-	st := *state
-	st.Frame = atomic.AddUint32(&d.frame, 1)
-	d.inputState = &st
+	updated := *state
+	d.mtx.Lock()
+	d.frame++
+	updated.Frame = d.frame
+	d.inputState = &updated
+	d.mtx.Unlock()
+}
+
+func (d *SteamController) snapshotInputState() InputState {
+	d.mtx.Lock()
+	defer d.mtx.Unlock()
+	return *d.inputState
 }
 
 func (d *SteamController) buildInputReport(st InputState, frame uint32) []byte {
@@ -203,14 +212,10 @@ func (d *SteamController) HandleTransfer(ctx context.Context, ep uint32, dir uin
 		case mouseEndpointNumber:
 			return append([]byte(nil), zeroMouseReport...)
 		case keyboardEndpointNumber:
-			d.stateMu.Lock()
-			st := *d.inputState
-			d.stateMu.Unlock()
+			st := d.snapshotInputState()
 			return d.buildLizardKeyboardReport(st)
 		case controllerEndpointNumber:
-			d.stateMu.Lock()
-			st := *d.inputState
-			d.stateMu.Unlock()
+			st := d.snapshotInputState()
 			report := d.buildInputReport(st, st.Frame)
 			return report
 		default:
@@ -275,9 +280,7 @@ func (d *SteamController) HandleControl(bmRequestType, bRequest uint8, wValue, w
 	if bmRequestType == 0xa1 && bRequest == hidGetReport {
 		switch reportType {
 		case reportTypeInput:
-			d.stateMu.Lock()
-			st := *d.inputState
-			d.stateMu.Unlock()
+			st := d.snapshotInputState()
 			report := d.buildInputReport(st, st.Frame)
 			if wLength > 0 && int(wLength) < len(report) {
 				return report[:wLength], true
@@ -347,9 +350,7 @@ func (d *SteamController) handleHostCommand(data []byte) {
 	case FeatureSetDigitalMappings:
 		d.controller.digitalMaps = true
 	case FeatureResetIMU:
-		d.stateMu.Lock()
-		st := *d.inputState
-		d.stateMu.Unlock()
+		st := d.snapshotInputState()
 		d.imuBias = imuBiasState{
 			valid:  true,
 			accelX: st.AccelX,
@@ -406,8 +407,8 @@ func (d *SteamController) getFeatureResponse(reportID uint8) []byte {
 		return d.featureResponse([]byte{reportID})
 	}
 
-	d.featureMu.Lock()
-	defer d.featureMu.Unlock()
+	d.featureMtx.Lock()
+	defer d.featureMtx.Unlock()
 	if len(d.lastFeatureResponse) == 0 {
 		return nil
 	}
@@ -416,8 +417,8 @@ func (d *SteamController) getFeatureResponse(reportID uint8) []byte {
 
 func (d *SteamController) setFeatureResponse(request []byte) {
 	resp := d.featureResponse(request)
-	d.featureMu.Lock()
-	defer d.featureMu.Unlock()
+	d.featureMtx.Lock()
+	defer d.featureMtx.Unlock()
 	if resp == nil {
 		d.lastFeatureResponse = nil
 		return
