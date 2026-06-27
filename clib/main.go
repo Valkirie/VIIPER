@@ -63,6 +63,9 @@ var (
 
 	// feedbackCallbacks stores registered C callbacks for devices.
 	feedbackCallbacks = make(map[deviceKey]*feedbackReg)
+
+	// attachedDevices tracks which device keys have already been attached to Windows.
+	attachedDevices = make(map[deviceKey]bool)
 )
 
 type deviceKey struct {
@@ -199,6 +202,35 @@ func applyAlias(tn string, opts *device.CreateOptions) string {
 	return alias.registryName
 }
 
+func attachDeviceToWindows(bid, did uint32) error {
+	key := deviceKey{busID: bid, devID: did}
+	if attachedDevices[key] {
+		return nil
+	}
+
+	port := server.GetListenPort()
+	if port == 0 {
+		return fmt.Errorf("server listen port not available")
+	}
+
+	exportMeta := &usbip.ExportMeta{BusID: bid, DevID: did}
+	logger := slog.Default()
+
+	mu.Unlock()
+	err := api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
+	if err != nil {
+		slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
+		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
+	}
+	mu.Lock()
+
+	if err == nil {
+		attachedDevices[key] = true
+	}
+
+	return err
+}
+
 // hiddenDeviceTypes are device types from the registry that should not appear
 // in the user-facing device type list (non-controller devices).
 var hiddenDeviceTypes = map[string]bool{
@@ -312,6 +344,7 @@ func viiper_shutdown() {
 
 	// Clear device tracking.
 	devices = make(map[deviceKey]*deviceInfo)
+	attachedDevices = make(map[deviceKey]bool)
 	feedbackCallbacks = make(map[deviceKey]*feedbackReg)
 }
 
@@ -357,6 +390,7 @@ func viiper_bus_remove(busID C.uint32_t) C.int {
 		if k.busID == bid {
 			delete(devices, k)
 			delete(feedbackCallbacks, k)
+			delete(attachedDevices, k)
 		}
 	}
 
@@ -430,31 +464,12 @@ func viiper_device_add(busID C.uint32_t, typeName *C.char, outDeviceID *C.uint32
 	}
 
 	// Auto-attach the device via usbip-win2 so it appears in Windows.
-	// Done synchronously (after releasing the mutex) so the device is fully
-	// attached before the caller starts sending input.
-	port := server.GetListenPort()
-	if port > 0 {
-		exportMeta := &usbip.ExportMeta{
-			BusID: bid,
-			DevID: devID,
-		}
-		logger := slog.Default()
-
-		// Release the mutex before the blocking attach call — the USBIP
-		// server needs to handle the incoming connection.
-		mu.Unlock()
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-		if err != nil {
-			slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
-			err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-		}
-		mu.Lock()
-
-		if err != nil {
-			slog.Error("auto-attach failed", "error", err)
-			// Device was added but attach failed — not a fatal error.
-			// The caller can retry with viiper_device_attach.
-		}
+	// Done synchronously so the device is fully attached before the caller
+	// starts sending input.
+	if err := attachDeviceToWindows(bid, devID); err != nil {
+		slog.Error("auto-attach failed", "error", err)
+		// Device was added but attach failed — not a fatal error.
+		// The caller can retry with viiper_device_attach.
 	}
 
 	return 0
@@ -527,25 +542,8 @@ func viiper_device_add_ex(busID C.uint32_t, typeName *C.char, vid C.uint16_t, pi
 		*outDeviceID = C.uint32_t(devID)
 	}
 
-	port := server.GetListenPort()
-	if port > 0 {
-		exportMeta := &usbip.ExportMeta{
-			BusID: bid,
-			DevID: devID,
-		}
-		logger := slog.Default()
-
-		mu.Unlock()
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-		if err != nil {
-			slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
-			err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-		}
-		mu.Lock()
-
-		if err != nil {
-			slog.Error("auto-attach failed", "error", err)
-		}
+	if err := attachDeviceToWindows(bid, devID); err != nil {
+		slog.Error("auto-attach failed", "error", err)
 	}
 
 	return 0
@@ -566,23 +564,7 @@ func viiper_device_attach(busID C.uint32_t, deviceID C.uint32_t) C.int {
 	bid := uint32(busID)
 	did := uint32(deviceID)
 
-	port := server.GetListenPort()
-	if port == 0 {
-		return setError(fmt.Errorf("server listen port not available"))
-	}
-
-	exportMeta := &usbip.ExportMeta{
-		BusID: bid,
-		DevID: did,
-	}
-	logger := slog.Default()
-
-	// Try native IOCTL first, then fall back to usbip.exe command.
-	err := api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-	if err != nil {
-		slog.Warn("attach via IOCTL failed, trying usbip.exe", "error", err)
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-	}
+	err := attachDeviceToWindows(bid, did)
 	if err != nil {
 		return setError(fmt.Errorf("attach device: %w", err))
 	}
@@ -605,6 +587,7 @@ func viiper_device_remove(busID C.uint32_t, deviceID C.uint32_t) C.int {
 	key := deviceKey{busID: bid, devID: did}
 	delete(devices, key)
 	delete(feedbackCallbacks, key)
+	delete(attachedDevices, key)
 
 	didStr := fmt.Sprintf("%d", did)
 	if err := server.RemoveDeviceByID(bid, didStr); err != nil {
