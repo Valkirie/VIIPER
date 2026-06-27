@@ -110,7 +110,10 @@ func (d *NS2Pro) UpdateInputState(state InputState) {
 	d.stateMu.Lock()
 	d.inputState = &state
 	d.stateMu.Unlock()
-	d.inputCh <- struct{}{}
+	select {
+	case d.inputCh <- struct{}{}:
+	default:
+	}
 }
 
 func (d *NS2Pro) SetMetaState(meta MetaState) {

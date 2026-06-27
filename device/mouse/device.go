@@ -17,7 +17,6 @@ type Mouse struct {
 	tick       uint64
 	inputCh    chan InputState
 	descriptor usb.Descriptor
-	reportBuf  [9]byte // Pre-allocated HID report buffer
 }
 
 // New returns a new Mouse device.
@@ -39,6 +38,10 @@ func New(o *device.CreateOptions) (*Mouse, error) {
 }
 
 func (m *Mouse) UpdateInputState(state InputState) {
+	select {
+	case <-m.inputCh:
+	default:
+	}
 	m.inputCh <- state
 }
 
@@ -58,7 +61,7 @@ func (m *Mouse) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out [
 					default:
 					}
 				}
-				return st.BuildReport(m.reportBuf)
+				return st.BuildReport()
 			}
 		default:
 			return nil

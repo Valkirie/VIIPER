@@ -29,8 +29,8 @@ func NewInputState() *InputState { return &InputState{} }
 //	Bytes 3-4: DY (int16 little-endian)
 //	Bytes 5-6: Wheel (int16 little-endian)
 //	Bytes 7-8: Pan (int16 little-endian)
-func (m *InputState) BuildReport(buf [9]byte) []byte {
-	b := buf[:]
+func (m *InputState) BuildReport() []byte {
+	b := make([]byte, 9)
 	b[0] = m.Buttons & 0x1F // 5 buttons, mask upper bits
 	b[1] = byte(m.DX)
 	b[2] = byte(m.DX >> 8)
