@@ -61,6 +61,7 @@ const (
 
 type SteamController struct {
 	inputState          *InputState
+	inputCh             chan struct{}
 	mtx                 sync.Mutex
 	featureMtx          sync.Mutex
 	outputFunc          func(OutputState)
@@ -129,8 +130,10 @@ func New(o *device.CreateOptions) (*SteamController, error) {
 	d := &SteamController{
 		descriptor: defaultDescriptor,
 		inputState: &InputState{},
+		inputCh:    make(chan struct{}, 1),
 		controller: newControllerState(),
 	}
+	d.inputCh <- struct{}{}
 	if o != nil {
 		if o.IDVendor != nil {
 			d.descriptor.Device.IDVendor = *o.IDVendor
@@ -175,6 +178,10 @@ func (d *SteamController) setInputState(state *InputState) {
 	updated.Frame = d.frame
 	d.inputState = &updated
 	d.mtx.Unlock()
+	select {
+	case d.inputCh <- struct{}{}:
+	default:
+	}
 }
 
 func (d *SteamController) snapshotInputState() InputState {
@@ -210,11 +217,31 @@ func (d *SteamController) HandleTransfer(ctx context.Context, ep uint32, dir uin
 	if dir == usbip.DirIn {
 		switch ep {
 		case mouseEndpointNumber:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				select {
+				case <-ctx.Done():
+					return append([]byte(nil), zeroMouseReport...)
+				}
+			}
 			return append([]byte(nil), zeroMouseReport...)
 		case keyboardEndpointNumber:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				select {
+				case <-ctx.Done():
+					st := d.snapshotInputState()
+					return d.buildLizardKeyboardReport(st)
+				}
+			}
 			st := d.snapshotInputState()
 			return d.buildLizardKeyboardReport(st)
 		case controllerEndpointNumber:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				select {
+				case <-d.inputCh:
+				case <-ctx.Done():
+					return nil
+				}
+			}
 			st := d.snapshotInputState()
 			report := d.buildInputReport(st, st.Frame)
 			return report

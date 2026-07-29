@@ -28,6 +28,7 @@ var zeroKeyboardReport = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 type SteamDeck struct {
 	inputState          *InputState
+	inputCh             chan struct{}
 	mtx                 sync.Mutex
 	featureMtx          sync.Mutex
 	outputFunc          func(OutputState)
@@ -111,8 +112,10 @@ func New(o *device.CreateOptions) (*SteamDeck, error) {
 	d := &SteamDeck{
 		descriptor: cloneDescriptor(),
 		inputState: &InputState{},
+		inputCh:    make(chan struct{}, 1),
 		controller: newControllerState(),
 	}
+	d.inputCh <- struct{}{}
 	if o != nil {
 		if o.IDVendor != nil {
 			d.descriptor.Device.IDVendor = *o.IDVendor
@@ -142,6 +145,10 @@ func (d *SteamDeck) setInputState(state *InputState) {
 	updated.Frame = d.frame
 	d.inputState = &updated
 	d.mtx.Unlock()
+	select {
+	case d.inputCh <- struct{}{}:
+	default:
+	}
 }
 
 func (d *SteamDeck) snapshotInputState() InputState {
@@ -154,10 +161,29 @@ func (d *SteamDeck) HandleTransfer(ctx context.Context, ep uint32, dir uint32, o
 	if dir == usbip.DirIn {
 		switch ep {
 		case mouseEndpointNumber:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				select {
+				case <-ctx.Done():
+					return append([]byte(nil), zeroMouseReport...)
+				}
+			}
 			return append([]byte(nil), zeroMouseReport...)
 		case keyboardEndpointNumber:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				select {
+				case <-ctx.Done():
+					return append([]byte(nil), zeroKeyboardReport...)
+				}
+			}
 			return append([]byte(nil), zeroKeyboardReport...)
 		case controllerEndpointNumber:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				select {
+				case <-d.inputCh:
+				case <-ctx.Done():
+					return nil
+				}
+			}
 			st := d.snapshotInputState()
 			return st.buildReport(st.Frame, DeckInputPayloadLen)
 		default:
