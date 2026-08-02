@@ -78,6 +78,9 @@ func (x *Xbox360) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out
 				return st.BuildReport()
 			}
 		default:
+			if _, hasDeadline := ctx.Deadline(); hasDeadline {
+				<-ctx.Done()
+			}
 			return nil
 		}
 	}
