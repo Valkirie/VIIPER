@@ -8,11 +8,11 @@ import (
 	"time"
 
 	viiperTesting "github.com/Alia5/VIIPER/_testing"
-	"github.com/Alia5/VIIPER/apiclient"
 	"github.com/Alia5/VIIPER/device/steamdeck"
 	"github.com/Alia5/VIIPER/internal/server/api"
 	"github.com/Alia5/VIIPER/internal/server/api/handler"
 	"github.com/Alia5/VIIPER/usbip"
+	"github.com/Alia5/VIIPER/viiperclient"
 	"github.com/Alia5/VIIPER/virtualbus"
 	"github.com/stretchr/testify/assert"
 
@@ -78,11 +78,39 @@ func TestInputReports(t *testing.T) {
 				return
 			}
 			dev.UpdateInputState(&tt.state)
-			got := dev.HandleTransfer(defaultControllerEndpoint, usbip.DirIn, nil)
+			got := dev.HandleTransfer(context.Background(), defaultControllerEndpoint, usbip.DirIn, nil)
 			tt.validate(t, got)
 		})
 	}
 }
+
+func TestIdleKeyboardAndMouseTransfersRemainPending(t *testing.T) {
+	dev, err := steamdeck.New(nil)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	tests := []struct {
+		name     string
+		endpoint uint32
+	}{
+		{name: "keyboard", endpoint: 1},
+		{name: "mouse", endpoint: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+
+			got := dev.HandleTransfer(ctx, tt.endpoint, usbip.DirIn, nil)
+
+			assert.Nil(t, got)
+			assert.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		})
+	}
+}
+
 func TestMotionFieldWireOrderMatchesSteamConsumers(t *testing.T) {
 	dev, err := steamdeck.New(nil)
 	if !assert.NoError(t, err) {
@@ -102,7 +130,7 @@ func TestMotionFieldWireOrderMatchesSteamConsumers(t *testing.T) {
 		GyroQuatZ: 0x0aaa,
 	})
 
-	got := dev.HandleTransfer(defaultControllerEndpoint, usbip.DirIn, nil)
+	got := dev.HandleTransfer(context.Background(), defaultControllerEndpoint, usbip.DirIn, nil)
 
 	// Linux hid-steam and SDL both decode the Steam Deck IMU report as X, Z, -Y.
 	// Keep the raw field order stable so higher-level HC translations can target it precisely.
@@ -352,14 +380,14 @@ func TestAPIStreamAndUSBInput(t *testing.T) {
 		t.Fatalf("Failed to start API server: %v", err)
 	}
 
-	b, err := virtualbus.NewWithBusId(1)
+	b, err := virtualbus.NewWithBusID(1)
 	if err != nil {
 		t.Fatalf("Failed to create virtual bus: %v", err)
 	}
 	defer b.Close()
 	_ = s.UsbServer.AddBus(b)
 
-	client := apiclient.New(s.ApiServer.Addr())
+	client := viiperclient.New(s.ApiServer.Addr())
 	stream, _, err := client.AddDeviceAndConnect(context.Background(), b.BusID(), "steamdeck", nil)
 	if !assert.NoError(t, err) {
 		return
@@ -427,7 +455,7 @@ func TestAPIStreamAndUSBInput(t *testing.T) {
 	cmd[4] = steamdeck.IntensityLong
 	cmd[5] = 0xf9
 	dev := b.GetAllDeviceMetas()[0].Dev
-	dev.HandleTransfer(defaultControllerEndpoint, usbip.DirOut, cmd)
+	dev.HandleTransfer(context.Background(), defaultControllerEndpoint, usbip.DirOut, cmd)
 
 	var feedback [steamdeck.InputReportLen]byte
 	_ = stream.SetReadDeadline(time.Now().Add(750 * time.Millisecond))
