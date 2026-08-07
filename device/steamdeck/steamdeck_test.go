@@ -37,7 +37,9 @@ func TestInputReports(t *testing.T) {
 				assert.Equal(t, byte(steamdeck.InputReportID), got[2])
 				assert.Equal(t, byte(steamdeck.DeckInputPayloadLen), got[3])
 				assert.Equal(t, make([]byte, 7), got[8:15])
-				assert.Equal(t, uint16(0x4000), binary.LittleEndian.Uint16(got[36:38]))
+				// No identity quaternion when unset: we don't advertise SendOrientation,
+				// so the quat slots stay zero like InputPlumber's Steam Deck target.
+				assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(got[36:38]))
 				assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(got[38:40]))
 				assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(got[40:42]))
 				assert.Equal(t, uint16(0), binary.LittleEndian.Uint16(got[42:44]))
