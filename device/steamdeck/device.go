@@ -22,10 +22,6 @@ const (
 	genericEndpointNumber    = 0x01
 )
 
-var zeroMouseReport = []byte{0x00, 0x00, 0x00, 0x00}
-
-var zeroKeyboardReport = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-
 type SteamDeck struct {
 	inputState          *InputState
 	inputCh             chan struct{}
@@ -160,22 +156,11 @@ func (d *SteamDeck) snapshotInputState() InputState {
 func (d *SteamDeck) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
 	if dir == usbip.DirIn {
 		switch ep {
-		case mouseEndpointNumber:
-			if _, hasDeadline := ctx.Deadline(); hasDeadline {
-				select {
-				case <-ctx.Done():
-					return append([]byte(nil), zeroMouseReport...)
-				}
-			}
-			return append([]byte(nil), zeroMouseReport...)
-		case keyboardEndpointNumber:
-			if _, hasDeadline := ctx.Deadline(); hasDeadline {
-				select {
-				case <-ctx.Done():
-					return append([]byte(nil), zeroKeyboardReport...)
-				}
-			}
-			return append([]byte(nil), zeroKeyboardReport...)
+		case mouseEndpointNumber, keyboardEndpointNumber:
+			// These interfaces are descriptor placeholders only. Keep the host request
+			// pending instead of completing it with idle input that can wake the system.
+			<-ctx.Done()
+			return nil
 		case controllerEndpointNumber:
 			if _, hasDeadline := ctx.Deadline(); hasDeadline {
 				select {
