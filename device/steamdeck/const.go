@@ -6,10 +6,15 @@ const (
 )
 
 const (
-	DefaultProfile      = "steamdeck"
-	InputReportID       = 0x09
-	InputReportLen      = 64
-	DeckInputPayloadLen = 56
+	DefaultProfile = "steamdeck"
+	InputReportID  = 0x09
+	InputReportLen = 64
+	// DeckInputPayloadLen is the value of header byte 3 (ucLength) in deck state
+	// reports. Real hardware stamps the full 64-byte report length here, and SDL3's
+	// hidapi Steam Deck driver silently discards any report whose ucLength != 64
+	// (SDL_hidapi_steamdeck.c: header.ucLength == 64), so 56 made SDL3 apps see the
+	// controller but never receive input.
+	DeckInputPayloadLen = 64
 )
 
 const (
