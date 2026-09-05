@@ -16,7 +16,7 @@ import (
 // to device-specific handlers based on device type.
 func DeviceStreamHandler(srv *usb.Server) StreamHandlerFunc {
 	return func(conn net.Conn, dev *pusb.Device, logger *slog.Logger) error {
-		defer conn.Close() //nolint:errcheck
+		defer conn.Close()
 
 		if dev == nil || *dev == nil {
 			return fmt.Errorf("nil device")
@@ -40,7 +40,7 @@ func inferDeviceType(dev any) string {
 		return ""
 	}
 	t := reflect.TypeOf(dev)
-	if t.Kind() == reflect.Pointer {
+	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
 	pkg := t.PkgPath() // e.g., "github.com/Alia5/VIIPER/device/xbox360"

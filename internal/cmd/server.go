@@ -24,8 +24,8 @@ import (
 const keyFileName = "viiper.key.txt"
 
 type Server struct {
-	USBServerConfig   usb.ServerConfig `embed:"" prefix:"usb."`
-	APIServerConfig   api.ServerConfig `embed:"" prefix:"api."`
+	UsbServerConfig   usb.ServerConfig `embed:"" prefix:"usb."`
+	ApiServerConfig   api.ServerConfig `embed:"" prefix:"api."`
 	ConnectionTimeout time.Duration    `help:"ConnectionTimeout operation timeout" default:"30s" env:"VIIPER_CONNECTION_TIMEOUT"`
 }
 
@@ -39,13 +39,13 @@ func (s *Server) Run(logger *slog.Logger, rawLogger log.RawLogger) error {
 func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger log.RawLogger) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	tray.Run(ctx, cancel)
+	go tray.Run(cancel)
 
-	s.USBServerConfig.ConnectionTimeout = s.ConnectionTimeout
-	s.APIServerConfig.ConnectionTimeout = s.ConnectionTimeout
-	s.USBServerConfig.BusCleanupTimeout = s.APIServerConfig.DeviceHandlerConnectTimeout
+	s.UsbServerConfig.ConnectionTimeout = s.ConnectionTimeout
+	s.ApiServerConfig.ConnectionTimeout = s.ConnectionTimeout
+	s.UsbServerConfig.BusCleanupTimeout = s.ApiServerConfig.DeviceHandlerConnectTimeout
 
-	logger.Info("Starting VIIPER USB-IP server", "addr", s.USBServerConfig.Addr)
+	logger.Info("Starting VIIPER USB-IP server", "addr", s.UsbServerConfig.Addr)
 
 	keyFileDir, err := configpaths.KeyFileDir()
 	if err != nil {
@@ -53,7 +53,7 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 	}
 	keyFilePath := filepath.Join(keyFileDir, keyFileName)
 	if pwd, err := os.ReadFile(keyFilePath); err == nil {
-		s.APIServerConfig.Password = strings.TrimSpace(string(pwd))
+		s.ApiServerConfig.Password = strings.TrimSpace(string(pwd))
 	} else {
 		newPwd, err := auth.GenerateKey()
 		if err != nil {
@@ -65,7 +65,7 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 		if err := os.WriteFile(keyFilePath, []byte(newPwd), 0o600); err != nil {
 			return fmt.Errorf("failed to write new API password to file: %w", err)
 		}
-		s.APIServerConfig.Password = newPwd
+		s.ApiServerConfig.Password = newPwd
 		logger.Info("Generated API server password", "path", keyFilePath)
 		logger.Info("-------------------------------------")
 		logger.Info("Your VIIPER API server password is:")
@@ -75,7 +75,7 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 		logger.Info("You can change this password at any time by editing the file")
 	}
 
-	usbSrv := usb.New(s.USBServerConfig, logger, rawLogger)
+	usbSrv := usb.New(s.UsbServerConfig, logger, rawLogger)
 
 	usbErrCh := make(chan error, 1)
 	go func() {
@@ -88,12 +88,12 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 	case <-usbSrv.Ready():
 	}
 
-	if s.APIServerConfig.Addr == "" {
+	if s.ApiServerConfig.Addr == "" {
 		logger.Error("API server address must be set (default :3242).")
-		return fmt.Errorf("API server address must be set (default :3242).") // nolint
+		return fmt.Errorf("API server address must be set (default :3242).")
 	}
 
-	apiSrv := api.New(usbSrv, s.APIServerConfig.Addr, s.APIServerConfig, logger)
+	apiSrv := api.New(usbSrv, s.ApiServerConfig.Addr, s.ApiServerConfig, logger)
 	r := apiSrv.Router()
 	r.Register("ping", handler.Ping())
 	r.Register("bus/list", handler.BusList(usbSrv))
@@ -104,9 +104,9 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 	r.Register("bus/{id}/remove", handler.BusDeviceRemove(usbSrv))
 	r.RegisterStream("bus/{busId}/{deviceid}", api.DeviceStreamHandler(usbSrv))
 
-	if s.APIServerConfig.AutoAttachLocalClient {
+	if s.ApiServerConfig.AutoAttachLocalClient {
 		logger.Info("Auto-attach is enabled, checking prerequisites...")
-		if !api.CheckAutoAttachPrerequisites(s.APIServerConfig.AutoAttachWindowsNative, logger) {
+		if !api.CheckAutoAttachPrerequisites(s.ApiServerConfig.AutoAttachWindowsNative, logger) {
 			logger.Warn("Auto-attach prerequisites not met")
 			logger.Warn("Device auto-attachment will fail until requirements are satisfied")
 			logger.Info("You can disable auto-attach with --api.auto-attach-local-client=false")
@@ -119,7 +119,7 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 		logger.Error("failed to start API server", "error", err)
 		if util.IsRunFromGUI() {
 			fmt.Println("Press any key to exit...")
-			b := make([]byte, 1)
+			var b []byte = make([]byte, 1)
 			_, _ = os.Stdin.Read(b)
 		}
 		return err
@@ -138,7 +138,7 @@ func (s *Server) StartServer(ctx context.Context, logger *slog.Logger, rawLogger
 			apiSrv.Close()
 		}
 		_ = usbSrv.Close()
-		_ = <-usbErrCh // nolint
+		_ = <-usbErrCh
 		return nil
 	case err := <-usbErrCh:
 		if apiSrv != nil {

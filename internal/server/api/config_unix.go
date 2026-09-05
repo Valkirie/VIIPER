@@ -2,6 +2,6 @@
 
 package api
 
-type PlatformOpts struct {
+type platformOpts struct {
 	AutoAttachWindowsNative bool `kong:"-"`
 }

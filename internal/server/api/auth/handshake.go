@@ -10,8 +10,8 @@ import (
 	"io"
 	"strings"
 
+	apitypes "github.com/Alia5/VIIPER/apitypes"
 	apierror "github.com/Alia5/VIIPER/internal/server/api/error"
-	"github.com/Alia5/VIIPER/viipertypes"
 )
 
 const (
@@ -96,7 +96,7 @@ func HandleAuthHandshake(r *bufio.Reader, w io.Writer, key []byte, isClient bool
 			raw := append(respPrefix, rest...)
 			line := strings.TrimSuffix(string(raw), "\n")
 
-			var apiErr viipertypes.APIError
+			var apiErr apitypes.ApiError
 			if err := json.Unmarshal([]byte(line), &apiErr); err == nil && (apiErr.Status != 0 || apiErr.Title != "") {
 				return nil, nil, &apiErr
 			}

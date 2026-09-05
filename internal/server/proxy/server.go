@@ -68,14 +68,14 @@ func (s *Server) Close() error {
 }
 
 func (s *Server) handleProxy(clientConn net.Conn) {
-	defer clientConn.Close() //nolint:errcheck
+	defer clientConn.Close()
 
 	upstreamConn, err := net.DialTimeout("tcp", s.upstreamAddr, s.connectionTimeout)
 	if err != nil {
 		s.logger.Error("Failed to connect to upstream", "upstream", s.upstreamAddr, "error", err)
 		return
 	}
-	defer upstreamConn.Close() //nolint:errcheck
+	defer upstreamConn.Close()
 
 	s.logger.Info("Proxying connection", "client", clientConn.RemoteAddr(), "upstream", upstreamConn.RemoteAddr())
 

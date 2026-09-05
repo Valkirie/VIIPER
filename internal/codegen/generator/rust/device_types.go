@@ -192,7 +192,7 @@ func generateDeviceWireStruct(outputPath, deviceName, className string, tag *sca
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close()
 
 	if err := tmpl.Execute(f, data); err != nil {
 		return fmt.Errorf("execute template: %w", err)

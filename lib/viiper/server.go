@@ -59,6 +59,9 @@ func NewUSBServer(config *C.USBServerConfig, outHandle *C.USBServerHandle, logCa
 	if busCleanupTimeout == 0 {
 		busCleanupTimeout = 5 * time.Second
 	}
+	if writeBatchFlushInterval == 0 {
+		writeBatchFlushInterval = 1 * time.Millisecond
+	}
 
 	var logger *slog.Logger
 	if logCallback != nil {

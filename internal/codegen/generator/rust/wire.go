@@ -34,7 +34,7 @@ func generateWireModule(logger *slog.Logger, srcDir string) error {
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close()
 
 	if _, err := f.WriteString(wireModuleTemplate); err != nil {
 		return fmt.Errorf("write template: %w", err)

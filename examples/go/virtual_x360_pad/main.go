@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Alia5/VIIPER/apiclient"
 	"github.com/Alia5/VIIPER/device/xbox360"
-	"github.com/Alia5/VIIPER/viiperclient"
 )
 
 func main() {
@@ -24,7 +24,7 @@ func main() {
 
 	addr := os.Args[1]
 	ctx := context.Background()
-	api := viiperclient.New(addr)
+	api := apiclient.New(addr)
 
 	// Find or create a bus
 	busesResp, err := api.BusListCtx(ctx)
@@ -62,16 +62,16 @@ func main() {
 		}
 		os.Exit(1)
 	}
-	defer stream.Close() //nolint:errcheck
+	defer stream.Close()
 
-	fmt.Printf("Created and connected to device %s on bus %d\n", addResp.DevID, addResp.BusID)
+	fmt.Printf("Created and connected to device %s on bus %d\n", addResp.DevId, addResp.BusID)
 
 	// Cleanup on exit
 	defer func() {
 		if _, err := api.DeviceRemoveCtx(ctx, stream.BusID, stream.DevID); err != nil {
 			fmt.Printf("DeviceRemove error: %v\n", err)
 		} else {
-			fmt.Printf("Removed device %d-%s\n", addResp.BusID, addResp.DevID)
+			fmt.Printf("Removed device %d-%s\n", addResp.BusID, addResp.DevId)
 		}
 		if createdBus {
 			if _, err := api.BusRemoveCtx(ctx, busID); err != nil {

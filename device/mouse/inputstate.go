@@ -17,9 +17,6 @@ type InputState struct {
 	Pan int16
 }
 
-// NewInputState returns a mouse input state in its neutral/resting state.
-func NewInputState() *InputState { return &InputState{} }
-
 // BuildReport encodes an InputState into the 9-byte HID mouse report.
 //
 // Report layout (9 bytes):

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/usb"
@@ -27,9 +28,10 @@ var zeroMouseReport = []byte{0x00, 0x00, 0x00, 0x00}
 var zeroKeyboardReport = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 
 type SteamDeck struct {
+	gate           *device.InputGate
 	inputState          *InputState
-	mtx                 sync.Mutex
-	featureMtx          sync.Mutex
+	stateMu             sync.Mutex
+	featureMu           sync.Mutex
 	outputFunc          func(OutputState)
 	frame               uint32
 	descriptor          usb.Descriptor
@@ -48,10 +50,10 @@ type controllerState struct {
 }
 
 var defaultSettings = map[uint8]uint16{
-	SettingLeftTrackpadMode:    TrackpadModeNone,
-	SettingRightTrackpadMode:   TrackpadModeNone,
-	SettingLizardMode:          LizardModeOff,
-	SettingSmoothAbsoluteMouse: 0,
+	SettingLeftTrackpadMode:           TrackpadModeNone,
+	SettingRightTrackpadMode:          TrackpadModeNone,
+	SettingLizardMode:                 LizardModeOff,
+	SettingSmoothAbsoluteMouse:        0,
 	// Advertise raw gyro + raw accel only (no SendOrientation): we don't compute a live
 	// orientation quaternion, so claiming orientation made Steam lean on a frozen identity
 	// quat and ignore our raw angular velocity (gyro-to-stick collapsed to center). This
@@ -109,16 +111,17 @@ func cloneDescriptor() usb.Descriptor {
 
 func New(o *device.CreateOptions) (*SteamDeck, error) {
 	d := &SteamDeck{
+		gate: device.NewInputGate(),
 		descriptor: cloneDescriptor(),
 		inputState: &InputState{},
 		controller: newControllerState(),
 	}
 	if o != nil {
-		if o.IDVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IDVendor
+		if o.IdVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IdVendor
 		}
-		if o.IDProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IDProduct
+		if o.IdProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IdProduct
 		}
 	}
 	return d, nil
@@ -129,36 +132,39 @@ func (d *SteamDeck) SetOutputCallback(f func(OutputState)) {
 }
 
 func (d *SteamDeck) UpdateInputState(state *InputState) {
-	d.setInputState(state)
-}
-
-func (d *SteamDeck) setInputState(state *InputState) {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
 	if state == nil {
-		state = &InputState{}
+		d.inputState = &InputState{}
+		d.gate.Signal()
+		return
 	}
-	updated := *state
-	d.mtx.Lock()
-	d.frame++
-	updated.Frame = d.frame
-	d.inputState = &updated
-	d.mtx.Unlock()
-}
-
-func (d *SteamDeck) snapshotInputState() InputState {
-	d.mtx.Lock()
-	defer d.mtx.Unlock()
-	return *d.inputState
+	st := *state
+	st.Frame = atomic.AddUint32(&d.frame, 1)
+	d.inputState = &st
+	d.gate.Signal()
 }
 
 func (d *SteamDeck) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
 	if dir == usbip.DirIn {
 		switch ep {
 		case mouseEndpointNumber:
+			if device.GateCancelled == device.BlockUntilDeadline(ctx) {
+				return nil
+			}
 			return append([]byte(nil), zeroMouseReport...)
 		case keyboardEndpointNumber:
+			if device.GateCancelled == device.BlockUntilDeadline(ctx) {
+				return nil
+			}
 			return append([]byte(nil), zeroKeyboardReport...)
 		case controllerEndpointNumber:
-			st := d.snapshotInputState()
+			if device.GateCancelled == d.gate.Wait(ctx) {
+				return nil
+			}
+			d.stateMu.Lock()
+			st := *d.inputState
+			d.stateMu.Unlock()
 			return st.buildReport(st.Frame, DeckInputPayloadLen)
 		default:
 			return nil
@@ -186,7 +192,9 @@ func (d *SteamDeck) HandleControl(bmRequestType, bRequest uint8, wValue, _ /* wI
 	if bmRequestType == 0xa1 && bRequest == hidGetReport {
 		switch reportType {
 		case reportTypeInput:
-			st := d.snapshotInputState()
+			d.stateMu.Lock()
+			st := *d.inputState
+			d.stateMu.Unlock()
 			report := st.buildReport(st.Frame, DeckInputPayloadLen)
 			if wLength > 0 && int(wLength) < len(report) {
 				return report[:wLength], true
@@ -290,8 +298,8 @@ func (d *SteamDeck) applySettings(data []byte) {
 }
 
 func (d *SteamDeck) getFeatureResponse(reportID uint8) []byte {
-	d.featureMtx.Lock()
-	defer d.featureMtx.Unlock()
+	d.featureMu.Lock()
+	defer d.featureMu.Unlock()
 	if reportID != 0 {
 		return d.featureResponse([]byte{reportID})
 	}
@@ -302,8 +310,8 @@ func (d *SteamDeck) getFeatureResponse(reportID uint8) []byte {
 }
 
 func (d *SteamDeck) setFeatureResponse(request []byte) {
-	d.featureMtx.Lock()
-	defer d.featureMtx.Unlock()
+	d.featureMu.Lock()
+	defer d.featureMu.Unlock()
 	resp := d.featureResponse(request)
 	if resp == nil {
 		d.lastFeatureResponse = nil
@@ -423,7 +431,7 @@ func (d *SteamDeck) GetDeviceSpecificArgs() map[string]any {
 	return map[string]any{"profile": DefaultProfile}
 }
 
-var reportDescriptor = hid.ReportDescriptor{
+var reportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: 0xffff},
 		hid.Usage{Usage: 0x01},
@@ -446,7 +454,7 @@ var reportDescriptor = hid.ReportDescriptor{
 	},
 }
 
-var mouseReportDescriptor = hid.ReportDescriptor{
+var mouseReportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageMouse},
@@ -478,7 +486,7 @@ var mouseReportDescriptor = hid.ReportDescriptor{
 	},
 }
 
-var keyboardReportDescriptor = hid.ReportDescriptor{
+var keyboardReportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageKeyboard},
@@ -516,14 +524,14 @@ var keyboardReportDescriptor = hid.ReportDescriptor{
 	},
 }
 
-func makeHIDFunction(report hid.ReportDescriptor) *usb.HIDFunction {
+func makeHIDFunction(report hid.Report) *usb.HIDFunction {
 	return &usb.HIDFunction{
 		Descriptor: usb.HIDDescriptor{
 			BcdHID:       0x0111,
 			BCountryCode: 0x00,
 			Descriptors:  []usb.HIDSubDescriptor{{Type: usb.ReportDescType}},
 		},
-		ReportDescriptor: report,
+		Report: report,
 	}
 }
 
@@ -543,7 +551,7 @@ var defaultDescriptor = usb.Descriptor{
 		BNumConfigurations: 0x01,
 		Speed:              2,
 	},
-	Configuration: usb.ConfigurationDescriptor{
+	Config: usb.ConfigHeader{
 		BConfigurationValue: 0x01,
 		BMAttributes:        0xa0,
 		BMaxPower:           250,

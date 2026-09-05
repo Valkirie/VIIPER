@@ -91,10 +91,10 @@ func CreateXbox360Device(
 
 	opts := &device.CreateOptions{}
 	if idVendor != 0 {
-		opts.IDVendor = &idVendor
+		opts.IdVendor = &idVendor
 	}
 	if idProduct != 0 {
-		opts.IDProduct = &idProduct
+		opts.IdProduct = &idProduct
 	}
 	if xinputSubType != 0 {
 		subOpts := &xbox360.Xbox360CreateOptions{
@@ -104,7 +104,12 @@ func CreateXbox360Device(
 		if err != nil {
 			return false
 		}
-		opts.DeviceSpecific = string(str)
+		var deviceSpecific map[string]any
+		err = json.Unmarshal(str, &deviceSpecific)
+		if err != nil {
+			return false
+		}
+		opts.DeviceSpecific = deviceSpecific
 	}
 	d, err := xbox360.New(opts)
 	if err != nil {
@@ -189,12 +194,12 @@ func RemoveXbox360Device(handle C.Xbox360DeviceHandle) bool {
 	if !ok {
 		return false
 	}
-	if err := dhw.usbServer.s.RemoveDeviceByID(dhw.exportMeta.BusID, fmt.Sprintf("%d", dhw.exportMeta.DevID)); err != nil {
+	if err := dhw.usbServer.s.RemoveDeviceByID(dhw.exportMeta.BusId, fmt.Sprintf("%d", dhw.exportMeta.DevId)); err != nil {
 		return false
 	}
 
 	shw := dhw.usbServer
-	busID := dhw.exportMeta.BusID
+	busID := dhw.exportMeta.BusId
 
 	shw.mtx.Lock()
 	defer shw.mtx.Unlock()

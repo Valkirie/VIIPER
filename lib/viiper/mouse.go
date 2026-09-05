@@ -65,10 +65,10 @@ func CreateMouseDevice(
 
 	opts := &device.CreateOptions{}
 	if idVendor != 0 {
-		opts.IDVendor = &idVendor
+		opts.IdVendor = &idVendor
 	}
 	if idProduct != 0 {
-		opts.IDProduct = &idProduct
+		opts.IdProduct = &idProduct
 	}
 
 	d, err := mouse.New(opts)
@@ -146,12 +146,12 @@ func RemoveMouseDevice(handle C.MouseDeviceHandle) bool {
 	if !ok {
 		return false
 	}
-	if err := dhw.usbServer.s.RemoveDeviceByID(dhw.exportMeta.BusID, fmt.Sprintf("%d", dhw.exportMeta.DevID)); err != nil {
+	if err := dhw.usbServer.s.RemoveDeviceByID(dhw.exportMeta.BusId, fmt.Sprintf("%d", dhw.exportMeta.DevId)); err != nil {
 		return false
 	}
 
 	shw := dhw.usbServer
-	busID := dhw.exportMeta.BusID
+	busID := dhw.exportMeta.BusId
 
 	shw.mtx.Lock()
 	defer shw.mtx.Unlock()

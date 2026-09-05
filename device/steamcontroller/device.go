@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/usb"
@@ -60,9 +61,10 @@ const (
 )
 
 type SteamController struct {
+	gate           *device.InputGate
 	inputState          *InputState
-	mtx                 sync.Mutex
-	featureMtx          sync.Mutex
+	stateMu             sync.Mutex
+	featureMu           sync.Mutex
 	outputFunc          func(OutputState)
 	frame               uint32
 	descriptor          usb.Descriptor
@@ -127,16 +129,17 @@ func newControllerState() controllerState {
 
 func New(o *device.CreateOptions) (*SteamController, error) {
 	d := &SteamController{
+		gate: device.NewInputGate(),
 		descriptor: defaultDescriptor,
 		inputState: &InputState{},
 		controller: newControllerState(),
 	}
 	if o != nil {
-		if o.IDVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IDVendor
+		if o.IdVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IdVendor
 		}
-		if o.IDProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IDProduct
+		if o.IdProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IdProduct
 		}
 	}
 	return d, nil
@@ -162,25 +165,17 @@ func (d *SteamController) SetOutputCallback(f func(OutputState)) {
 }
 
 func (d *SteamController) UpdateInputState(state *InputState) {
-	d.setInputState(state)
-}
-
-func (d *SteamController) setInputState(state *InputState) {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
 	if state == nil {
-		state = &InputState{}
+		d.inputState = &InputState{}
+		d.gate.Signal()
+		return
 	}
-	updated := *state
-	d.mtx.Lock()
-	d.frame++
-	updated.Frame = d.frame
-	d.inputState = &updated
-	d.mtx.Unlock()
-}
-
-func (d *SteamController) snapshotInputState() InputState {
-	d.mtx.Lock()
-	defer d.mtx.Unlock()
-	return *d.inputState
+	st := *state
+	st.Frame = atomic.AddUint32(&d.frame, 1)
+	d.inputState = &st
+	d.gate.Signal()
 }
 
 func (d *SteamController) buildInputReport(st InputState, frame uint32) []byte {
@@ -210,12 +205,25 @@ func (d *SteamController) HandleTransfer(ctx context.Context, ep uint32, dir uin
 	if dir == usbip.DirIn {
 		switch ep {
 		case mouseEndpointNumber:
+			if device.GateCancelled == device.BlockUntilDeadline(ctx) {
+				return nil
+			}
 			return append([]byte(nil), zeroMouseReport...)
 		case keyboardEndpointNumber:
-			st := d.snapshotInputState()
+			if device.GateCancelled == device.BlockUntilDeadline(ctx) {
+				return nil
+			}
+			d.stateMu.Lock()
+			st := *d.inputState
+			d.stateMu.Unlock()
 			return d.buildLizardKeyboardReport(st)
 		case controllerEndpointNumber:
-			st := d.snapshotInputState()
+			if device.GateCancelled == d.gate.Wait(ctx) {
+				return nil
+			}
+			d.stateMu.Lock()
+			st := *d.inputState
+			d.stateMu.Unlock()
 			report := d.buildInputReport(st, st.Frame)
 			return report
 		default:
@@ -280,7 +288,9 @@ func (d *SteamController) HandleControl(bmRequestType, bRequest uint8, wValue, w
 	if bmRequestType == 0xa1 && bRequest == hidGetReport {
 		switch reportType {
 		case reportTypeInput:
-			st := d.snapshotInputState()
+			d.stateMu.Lock()
+			st := *d.inputState
+			d.stateMu.Unlock()
 			report := d.buildInputReport(st, st.Frame)
 			if wLength > 0 && int(wLength) < len(report) {
 				return report[:wLength], true
@@ -350,7 +360,9 @@ func (d *SteamController) handleHostCommand(data []byte) {
 	case FeatureSetDigitalMappings:
 		d.controller.digitalMaps = true
 	case FeatureResetIMU:
-		st := d.snapshotInputState()
+		d.stateMu.Lock()
+		st := *d.inputState
+		d.stateMu.Unlock()
 		d.imuBias = imuBiasState{
 			valid:  true,
 			accelX: st.AccelX,
@@ -407,8 +419,8 @@ func (d *SteamController) getFeatureResponse(reportID uint8) []byte {
 		return d.featureResponse([]byte{reportID})
 	}
 
-	d.featureMtx.Lock()
-	defer d.featureMtx.Unlock()
+	d.featureMu.Lock()
+	defer d.featureMu.Unlock()
 	if len(d.lastFeatureResponse) == 0 {
 		return nil
 	}
@@ -417,8 +429,8 @@ func (d *SteamController) getFeatureResponse(reportID uint8) []byte {
 
 func (d *SteamController) setFeatureResponse(request []byte) {
 	resp := d.featureResponse(request)
-	d.featureMtx.Lock()
-	defer d.featureMtx.Unlock()
+	d.featureMu.Lock()
+	defer d.featureMu.Unlock()
 	if resp == nil {
 		d.lastFeatureResponse = nil
 		return
@@ -550,7 +562,7 @@ func (d *SteamController) GetDeviceSpecificArgs() map[string]any {
 	return map[string]any{}
 }
 
-var reportDescriptor = hid.ReportDescriptor{
+var reportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: 0xff00},
 		hid.Usage{Usage: 0x01},
@@ -571,7 +583,7 @@ var reportDescriptor = hid.ReportDescriptor{
 	},
 }
 
-var mouseReportDescriptor = hid.ReportDescriptor{
+var mouseReportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageMouse},
@@ -603,7 +615,7 @@ var mouseReportDescriptor = hid.ReportDescriptor{
 	},
 }
 
-var keyboardReportDescriptor = hid.ReportDescriptor{
+var keyboardReportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageKeyboard},
@@ -641,14 +653,14 @@ var keyboardReportDescriptor = hid.ReportDescriptor{
 	},
 }
 
-func makeHIDFunction(report hid.ReportDescriptor) *usb.HIDFunction {
+func makeHIDFunction(report hid.Report) *usb.HIDFunction {
 	return &usb.HIDFunction{
 		Descriptor: usb.HIDDescriptor{
 			BcdHID:       0x0111,
 			BCountryCode: 0x00,
 			Descriptors:  []usb.HIDSubDescriptor{{Type: usb.ReportDescType}},
 		},
-		ReportDescriptor: report,
+		Report: report,
 	}
 }
 
@@ -668,7 +680,7 @@ var defaultDescriptor = usb.Descriptor{
 		BNumConfigurations: 0x01,
 		Speed:              2,
 	},
-	Configuration: usb.ConfigurationDescriptor{
+	Config: usb.ConfigHeader{
 		BConfigurationValue: 0x01,
 		BMAttributes:        0xa0,
 		BMaxPower:           250,

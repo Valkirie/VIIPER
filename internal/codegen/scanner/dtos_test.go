@@ -6,8 +6,8 @@ import (
 )
 
 func TestScanDTOs(t *testing.T) {
-	// Scan the viipertypes package
-	schemas, err := ScanDTOsInPackage("../../..//viipertypes")
+	// Scan the apitypes package
+	schemas, err := ScanDTOsInPackage("../../..//apitypes")
 	if err != nil {
 		t.Fatalf("ScanDTOsInPackage failed: %v", err)
 	}
@@ -20,7 +20,7 @@ func TestScanDTOs(t *testing.T) {
 
 	// Expected DTOs
 	expectedDTOs := map[string]bool{
-		"APIError":             true,
+		"ApiError":             true,
 		"BusListResponse":      true,
 		"BusCreateResponse":    true,
 		"BusRemoveResponse":    true,

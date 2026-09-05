@@ -130,7 +130,7 @@ fn main() {
         // Simulate a short left click: press then release
         thread::sleep(Duration::from_millis(50));
         let _ = stream.send(&MouseInput {
-            buttons: BTN_LEFT,
+            buttons: BTN__LEFT,
             dx: 0,
             dy: 0,
             wheel: 0,

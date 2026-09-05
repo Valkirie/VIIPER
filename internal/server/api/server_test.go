@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	viiperTesting "github.com/Alia5/VIIPER/_testing"
+	"github.com/Alia5/VIIPER/apiclient"
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/device/xbox360"
 	th "github.com/Alia5/VIIPER/internal/_testing"
@@ -24,7 +25,6 @@ import (
 	srvusb "github.com/Alia5/VIIPER/internal/server/usb"
 	pusb "github.com/Alia5/VIIPER/usb"
 	"github.com/Alia5/VIIPER/usbip"
-	"github.com/Alia5/VIIPER/viiperclient"
 	"github.com/Alia5/VIIPER/virtualbus"
 )
 
@@ -41,9 +41,9 @@ func TestAPIServer_StreamHandlerError_ClosesConn(t *testing.T) {
 	r := apiSrv.Router()
 	r.RegisterStream("bus/{busId}/{deviceid}", api.DeviceStreamHandler(usbSrv))
 	require.NoError(t, apiSrv.Start())
-	defer apiSrv.Close() //nolint:errcheck
+	defer apiSrv.Close()
 
-	bus, err := virtualbus.NewWithBusID(70002)
+	bus, err := virtualbus.NewWithBusId(70002)
 	require.NoError(t, err)
 	require.NoError(t, usbSrv.AddBus(bus))
 	dev, err := xbox360.New(nil)
@@ -55,7 +55,7 @@ func TestAPIServer_StreamHandlerError_ClosesConn(t *testing.T) {
 	metas := bus.GetAllDeviceMetas()
 	require.Greater(t, len(metas), 0)
 	for _, m := range metas {
-		devID = fmt.Sprintf("%d", m.Meta.DevID)
+		devID = fmt.Sprintf("%d", m.Meta.DevId)
 	}
 	require.NotEmpty(t, devID)
 
@@ -163,12 +163,12 @@ func TestAPIServer_WrappedConn(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testSrvConfig := viiperTesting.TestServerConfig(t)
 
-			testSrvConfig.Server.APIServerConfig.RequireLocalHostAuth = tc.requireLocalAuth
-			testSrvConfig.Server.APIServerConfig.Password = tc.serverPass
+			testSrvConfig.Server.ApiServerConfig.RequireLocalHostAuth = tc.requireLocalAuth
+			testSrvConfig.Server.ApiServerConfig.Password = tc.serverPass
 
 			s := viiperTesting.NewTestServerWithConfig(t, testSrvConfig)
-			defer s.ApiServer.Close() //nolint:errcheck
-			defer s.UsbServer.Close() //nolint:errcheck
+			defer s.ApiServer.Close()
+			defer s.UsbServer.Close()
 
 			r := s.ApiServer.Router()
 			r.Register("bus/{id}/add", handler.BusDeviceAdd(s.UsbServer, s.ApiServer))
@@ -179,15 +179,15 @@ func TestAPIServer_WrappedConn(t *testing.T) {
 			}
 			time.Sleep(50 * time.Millisecond)
 
-			b, err := virtualbus.NewWithBusID(1)
+			b, err := virtualbus.NewWithBusId(1)
 			if err != nil {
 				t.Fatalf("Failed to create virtual bus: %v", err)
 			}
-			defer b.Close() //nolint:errcheck
+			defer b.Close()
 			_ = s.UsbServer.AddBus(b)
 			time.Sleep(50 * time.Millisecond)
 
-			client := viiperclient.NewWithPassword(s.ApiServer.Addr(), tc.clientPass)
+			client := apiclient.NewWithPassword(s.ApiServer.Addr(), tc.clientPass)
 
 			time.Sleep(50 * time.Millisecond)
 
@@ -206,7 +206,7 @@ func TestAPIServer_WrappedConn(t *testing.T) {
 
 			time.Sleep(50 * time.Millisecond)
 
-			stream, err := client.OpenStream(context.Background(), b.BusID(), resp.DevID)
+			stream, err := client.OpenStream(context.Background(), b.BusID(), resp.DevId)
 			if tc.expectedErr != nil {
 				assert.Error(t, err)
 				assert.ErrorContains(t, err, tc.expectedErr.Error())
@@ -216,7 +216,7 @@ func TestAPIServer_WrappedConn(t *testing.T) {
 					return
 				}
 			}
-			defer stream.Close() //nolint:errcheck
+			defer stream.Close()
 			time.Sleep(50 * time.Millisecond)
 
 			usbipClient := viiperTesting.NewUsbIpClient(t, s.UsbServer.Addr())
@@ -232,7 +232,7 @@ func TestAPIServer_WrappedConn(t *testing.T) {
 				return
 			}
 			if imp != nil && imp.Conn != nil {
-				defer imp.Conn.Close() //nolint:errcheck
+				defer imp.Conn.Close()
 			}
 
 			time.Sleep(50 * time.Millisecond)

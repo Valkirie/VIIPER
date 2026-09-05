@@ -22,19 +22,20 @@ func goTypeToTS(goType string) string {
 	}
 }
 
-func parseGoMapType(typeStr string) (string, bool) {
+func parseGoMapType(typeStr string) (keyType string, valueType string, ok bool) {
 	if !strings.HasPrefix(typeStr, "map[") {
-		return "", false
+		return "", "", false
 	}
 	closeIdx := strings.Index(typeStr, "]")
 	if closeIdx < 0 {
-		return "", false
+		return "", "", false
 	}
-	valueType := typeStr[closeIdx+1:]
-	if valueType == "" {
-		return "", false
+	keyType = typeStr[len("map["):closeIdx]
+	valueType = typeStr[closeIdx+1:]
+	if keyType == "" || valueType == "" {
+		return "", "", false
 	}
-	return valueType, true
+	return keyType, valueType, true
 }
 
 func writeFileHeaderTS() string { return common.FileHeader("//", "TypeScript") }

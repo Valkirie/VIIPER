@@ -9,16 +9,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Alia5/VIIPER/apiclient"
+	"github.com/Alia5/VIIPER/apitypes"
 	"github.com/Alia5/VIIPER/device/xbox360"
 	"github.com/Alia5/VIIPER/internal/cmd"
 	"github.com/Alia5/VIIPER/internal/server/api"
 	"github.com/Alia5/VIIPER/internal/server/usb"
-	"github.com/Alia5/VIIPER/viiperclient"
-	"github.com/Alia5/VIIPER/viipertypes"
 
 	_ "github.com/Alia5/VIIPER/internal/registry" // Register all device handlers
 
-	"github.com/Alia5/VIIPER/_testing/e2e/sdl"
+	"github.com/Zyko0/go-sdl3/bin/binsdl"
+	"github.com/Zyko0/go-sdl3/sdl"
 )
 
 type TimeWhat int
@@ -150,31 +151,28 @@ func Benchmark_Xbox360_Delay(b *testing.B) {
 
 	b.SetParallelism(1)
 
+	defer binsdl.Load().Unload()
 	defer sdl.Quit()
-	if err := sdl.Init(sdl.InitFlagGamepad); err != nil {
-		b.Fatalf("SDL init failed: %v", err)
-	}
+	sdl.Init(sdl.INIT_GAMEPAD)
 
 	sdl.UpdateGamepads()
 	existingGamepads, _ := sdl.GetGamepads()
-	existingGamepadSet := make(map[sdl.GamepadID]bool)
+	existingGamepadSet := make(map[sdl.JoystickID]bool)
 	for _, id := range existingGamepads {
 		existingGamepadSet[id] = true
 	}
 
 	s := cmd.Server{
-		USBServerConfig: usb.ServerConfig{
-			Addr:              ":3244",
-			BusCleanupTimeout: 1 * time.Second,
+		UsbServerConfig: usb.ServerConfig{
+			Addr:                    ":3244",
+			BusCleanupTimeout:       1 * time.Second,
+			WriteBatchFlushInterval: 0,
 		},
-		APIServerConfig: api.ServerConfig{
+		ApiServerConfig: api.ServerConfig{
 			Addr:                        ":3245",
 			AutoAttachLocalClient:       true,
 			DeviceHandlerConnectTimeout: time.Second * 5,
 			Password:                    "testpassword1234",
-			PlatformOpts: api.PlatformOpts{
-				AutoAttachWindowsNative: true,
-			},
 		},
 		ConnectionTimeout: 5 * time.Second,
 	}
@@ -187,10 +185,10 @@ func Benchmark_Xbox360_Delay(b *testing.B) {
 		}
 	}()
 
-	var c *viiperclient.Client
+	var c *apiclient.Client
 
-	c = viiperclient.New("localhost:3245")
-	var busResp *viipertypes.BusCreateResponse
+	c = apiclient.New("localhost:3245")
+	var busResp *apitypes.BusCreateResponse
 	var err error
 	for range 10 {
 		busResp, err = c.BusCreate(1)
@@ -210,11 +208,11 @@ func Benchmark_Xbox360_Delay(b *testing.B) {
 		b.Fatalf("DeviceAdd failed: %v", err)
 	}
 
-	devStream, err := c.OpenStream(ctx, busID, devInfo.DevID)
+	devStream, err := c.OpenStream(ctx, busID, devInfo.DevId)
 	if err != nil {
 		b.Fatalf("OpenStream failed: %v", err)
 	}
-	defer devStream.Close() //nolint:errcheck
+	defer devStream.Close()
 
 	var gamepad *sdl.Gamepad
 	for range 10 {
@@ -222,7 +220,7 @@ func Benchmark_Xbox360_Delay(b *testing.B) {
 		gIDs, _ := sdl.GetGamepads()
 		for _, id := range gIDs {
 			if !existingGamepadSet[id] {
-				gamepad, err = sdl.OpenGamepad(id)
+				gamepad, err = id.OpenGamepad()
 				if err != nil {
 					b.Fatalf("OpenGamepad failed: %v", err)
 				}
@@ -249,7 +247,7 @@ func Benchmark_Xbox360_Delay(b *testing.B) {
 			default:
 			}
 			sdl.UpdateGamepads()
-			pressed := gamepad.GetButton(sdl.GamepadButtonSouth)
+			pressed := gamepad.Button(sdl.GAMEPAD_BUTTON_SOUTH)
 			if pressed != prevPadPressed {
 				padChann <- pressed
 				prevPadPressed = pressed
@@ -259,7 +257,7 @@ func Benchmark_Xbox360_Delay(b *testing.B) {
 
 	for _, bench := range benches {
 		if bench.useEncryption {
-			c = viiperclient.NewWithPassword("localhost:3245", "testpassword1234")
+			c = apiclient.NewWithPassword("localhost:3245", "testpassword1234")
 		}
 		b.Run(bench.name, func(b *testing.B) {
 			for b.Loop() {

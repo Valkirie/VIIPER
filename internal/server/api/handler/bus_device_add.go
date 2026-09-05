@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Alia5/VIIPER/apitypes"
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/internal/server/api"
 	apierror "github.com/Alia5/VIIPER/internal/server/api/error"
 	usbs "github.com/Alia5/VIIPER/internal/server/usb"
-	"github.com/Alia5/VIIPER/viipertypes"
 )
 
 // BusDeviceAdd returns a handler to add devices to a bus.
@@ -32,7 +32,7 @@ func BusDeviceAdd(s *usbs.Server, apiSrv *api.Server) api.HandlerFunc {
 		if req.Payload == "" {
 			return apierror.ErrBadRequest("missing payload")
 		}
-		var deviceCreateReq viipertypes.DeviceCreateRequest
+		var deviceCreateReq apitypes.DeviceCreateRequest
 		err = json.Unmarshal([]byte(req.Payload), &deviceCreateReq)
 		if err != nil {
 			return apierror.ErrBadRequest(fmt.Sprintf("invalid JSON payload: %v", err))
@@ -49,15 +49,9 @@ func BusDeviceAdd(s *usbs.Server, apiSrv *api.Server) api.HandlerFunc {
 		}
 
 		opts := device.CreateOptions{
-			IDVendor:  deviceCreateReq.IDVendor,
-			IDProduct: deviceCreateReq.IDProduct,
-		}
-		if deviceCreateReq.DeviceSpecific != nil {
-			b, err := json.Marshal(deviceCreateReq.DeviceSpecific)
-			if err != nil {
-				return apierror.ErrBadRequest(fmt.Sprintf("invalid deviceSpecific JSON: %v", err))
-			}
-			opts.DeviceSpecific = string(b)
+			IdVendor:       deviceCreateReq.IdVendor,
+			IdProduct:      deviceCreateReq.IdProduct,
+			DeviceSpecific: deviceCreateReq.DeviceSpecific,
 		}
 
 		dev, err := reg.CreateDevice(&opts)
@@ -84,7 +78,7 @@ func BusDeviceAdd(s *usbs.Server, apiSrv *api.Server) api.HandlerFunc {
 				connTimer.Stop()
 				return
 			case <-connTimer.C:
-				deviceIDStr := fmt.Sprintf("%d", exportMeta.DevID)
+				deviceIDStr := fmt.Sprintf("%d", exportMeta.DevId)
 				if err := s.RemoveDeviceByID(uint32(busID), deviceIDStr); err != nil {
 					logger.Error("timeout: failed to remove device", "busID", busID, "deviceID", deviceIDStr, "error", err)
 				} else {
@@ -109,9 +103,9 @@ func BusDeviceAdd(s *usbs.Server, apiSrv *api.Server) api.HandlerFunc {
 			}
 		}
 
-		payload, err := json.Marshal(viipertypes.Device{
+		payload, err := json.Marshal(apitypes.Device{
 			BusID:          uint32(busID),
-			DevID:          fmt.Sprintf("%d", exportMeta.DevID),
+			DevId:          fmt.Sprintf("%d", exportMeta.DevId),
 			Vid:            fmt.Sprintf("0x%04x", dev.GetDescriptor().Device.IDVendor),
 			Pid:            fmt.Sprintf("0x%04x", dev.GetDescriptor().Device.IDProduct),
 			Type:           name,

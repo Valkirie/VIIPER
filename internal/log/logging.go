@@ -39,11 +39,15 @@ func SetupLogger(logLevel, logFile string) (*slog.Logger, []io.Closer, error) {
 	level := ParseLevel(logLevel)
 	var handlers []slog.Handler
 
-	stdoutHandler := &colorHandler{w: os.Stdout, level: level}
-	handlers = append(handlers, LevelFilter{pass: func(l slog.Level) bool { return l < slog.LevelError }, h: stdoutHandler})
+	if logFile == "" {
+		stdoutHandler := &colorHandler{w: os.Stdout, level: level}
+		handlers = append(handlers, LevelFilter{pass: func(l slog.Level) bool { return l < slog.LevelError }, h: stdoutHandler})
 
-	stderrHandler := &colorHandler{w: os.Stderr, level: slog.LevelError}
-	handlers = append(handlers, LevelFilter{pass: func(l slog.Level) bool { return l >= slog.LevelError }, h: stderrHandler})
+		stderrHandler := &colorHandler{w: os.Stderr, level: slog.LevelError}
+		handlers = append(handlers, LevelFilter{pass: func(l slog.Level) bool { return l >= slog.LevelError }, h: stderrHandler})
+	} else {
+		handlers = append(handlers, slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	}
 	var closeFiles []io.Closer
 	if logFile != "" {
 		f, err := os.OpenFile(logFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
@@ -150,16 +154,16 @@ func (h *colorHandler) Handle(_ context.Context, r slog.Record) error {
 		color = "\033[0m"
 	}
 	buf.WriteString(color)
-	fmt.Fprintf(&buf, "%5s", r.Level.String())
+	buf.WriteString(fmt.Sprintf("%5s", r.Level.String()))
 	buf.WriteString("\033[0m")
 
 	buf.WriteString(" ")
 	buf.WriteString(r.Message)
 
 	r.Attrs(func(a slog.Attr) bool {
-		buf.WriteString(" \033[90m")
+		buf.WriteString(" ")
 		buf.WriteString(a.Key)
-		buf.WriteString("=\033[0m")
+		buf.WriteString("=")
 		buf.WriteString(a.Value.String())
 		return true
 	})

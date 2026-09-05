@@ -14,8 +14,9 @@ import (
 
 // Keyboard implements the Device interface for a full HID keyboard with LED support.
 type Keyboard struct {
+	gate       *device.InputGate
 	tick        uint64
-	inputCh     chan InputState
+	inputState  *InputState
 	stateMu     sync.Mutex
 	ledState    uint8
 	ledCallback func(LEDState)
@@ -25,18 +26,17 @@ type Keyboard struct {
 // New returns a new Keyboard device.
 func New(o *device.CreateOptions) (*Keyboard, error) {
 	d := &Keyboard{
+		gate: device.NewInputGate(),
 		descriptor: defaultDescriptor,
 	}
 	if o != nil {
-		if o.IDVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IDVendor
+		if o.IdVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IdVendor
 		}
-		if o.IDProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IDProduct
+		if o.IdProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IdProduct
 		}
 	}
-	d.inputCh = make(chan InputState, 1)
-	d.inputCh <- *NewInputState()
 	return d, nil
 }
 
@@ -60,11 +60,10 @@ func (k *Keyboard) GetLEDState() LEDState {
 
 // UpdateInputState updates the device's current input state (thread-safe).
 func (k *Keyboard) UpdateInputState(state InputState) {
-	select {
-	case <-k.inputCh:
-	default:
-	}
-	k.inputCh <- state
+	k.stateMu.Lock()
+	defer k.stateMu.Unlock()
+	k.inputState = &state
+	k.gate.Signal()
 }
 
 // HandleTransfer implements interrupt IN/OUT for Keyboard.
@@ -72,13 +71,18 @@ func (k *Keyboard) HandleTransfer(ctx context.Context, ep uint32, dir uint32, ou
 	if dir == usbip.DirIn {
 		switch ep {
 		case 1: // 0x81 - keyboard input reports
-			atomic.AddUint64(&k.tick, 1)
-			select {
-			case <-ctx.Done():
+			if device.GateCancelled == k.gate.Wait(ctx) {
 				return nil
-			case st := <-k.inputCh:
-				return st.BuildReport()
 			}
+			atomic.AddUint64(&k.tick, 1)
+
+			k.stateMu.Lock()
+			var st InputState
+			if k.inputState != nil {
+				st = *k.inputState
+			}
+			k.stateMu.Unlock()
+			return st.BuildReport()
 		default:
 			return nil
 		}
@@ -105,7 +109,7 @@ func (k *Keyboard) HandleTransfer(ctx context.Context, ep uint32, dir uint32, ou
 }
 
 // HID Report Descriptor for a full keyboard with 256-bit key bitmap and LED output.
-var reportDescriptor = hid.ReportDescriptor{
+var reportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageKeyboard},
@@ -190,7 +194,7 @@ var defaultDescriptor = usb.Descriptor{
 						{Type: usb.ReportDescType}, // Length auto-filled from Report
 					},
 				},
-				ReportDescriptor: reportDescriptor,
+				Report: reportDescriptor,
 			},
 			Endpoints: []usb.EndpointDescriptor{
 				{
@@ -220,6 +224,6 @@ func (k *Keyboard) GetDescriptor() *usb.Descriptor {
 	return &k.descriptor
 }
 
-func (k *Keyboard) GetDeviceSpecificArgs() map[string]any {
+func (x *Keyboard) GetDeviceSpecificArgs() map[string]any {
 	return map[string]any{}
 }

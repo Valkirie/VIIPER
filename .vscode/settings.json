@@ -1,6 +1,5 @@
 {
     "go.toolsEnvVars": {
-        "CGO_ENABLED": "1",
-        "PATH": "${env:PATH};${workspaceFolder}/_testing/e2e/deps/SDL/build/Debug"
+        "CGO_ENABLED": "1"
     }
 }

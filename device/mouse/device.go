@@ -3,6 +3,7 @@ package mouse
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 
 	"github.com/Alia5/VIIPER/device"
@@ -14,55 +15,62 @@ import (
 // Mouse implements the minimal Device interface for a 5-button HID mouse
 // with vertical and horizontal wheels.
 type Mouse struct {
+	gate       *device.InputGate
 	tick       uint64
-	inputCh    chan InputState
+	inputState *InputState
+	stateMu    sync.Mutex
 	descriptor usb.Descriptor
 }
 
 // New returns a new Mouse device.
 func New(o *device.CreateOptions) (*Mouse, error) {
 	d := &Mouse{
+		gate: device.NewInputGate(),
 		descriptor: defaultDescriptor,
 	}
 	if o != nil {
-		if o.IDVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IDVendor
+		if o.IdVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IdVendor
 		}
-		if o.IDProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IDProduct
+		if o.IdProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IdProduct
 		}
 	}
-	d.inputCh = make(chan InputState, 1)
-	d.inputCh <- *NewInputState()
 	return d, nil
 }
 
+// UpdateInputState updates the device's current input state (thread-safe).
 func (m *Mouse) UpdateInputState(state InputState) {
-	select {
-	case <-m.inputCh:
-	default:
-	}
-	m.inputCh <- state
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	m.inputState = &state
+	m.gate.Signal()
 }
 
+// HandleTransfer implements interrupt IN for Mouse.
 func (m *Mouse) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
 	if dir == usbip.DirIn {
 		switch ep {
 		case 1: // 0x81 - main input reports
-			atomic.AddUint64(&m.tick, 1)
-			select {
-			case <-ctx.Done():
+			if device.GateCancelled == m.gate.Wait(ctx) {
 				return nil
-			case st := <-m.inputCh:
-				if st.DX != 0 || st.DY != 0 || st.Wheel != 0 || st.Pan != 0 {
-					zeroed := InputState{Buttons: st.Buttons}
-					select {
-					case m.inputCh <- zeroed:
-					default:
-					}
-				}
-				return st.BuildReport()
 			}
+			atomic.AddUint64(&m.tick, 1)
+
+			m.stateMu.Lock()
+			var st InputState
+			if m.inputState != nil {
+				// Snapshot current state
+				st = *m.inputState
+				// Consume relative deltas so they are one-shot per poll cycle.
+				// Buttons persist until explicitly changed by the client.
+				m.inputState.DX = 0
+				m.inputState.DY = 0
+				m.inputState.Wheel = 0
+				m.inputState.Pan = 0
+			}
+			m.stateMu.Unlock()
+			return st.BuildReport()
 		default:
 			return nil
 		}
@@ -72,7 +80,7 @@ func (m *Mouse) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out [
 
 // HID Report Descriptor for a 5-button mouse with vertical and horizontal wheels.
 // Boot protocol compatible.
-var reportDescriptor = hid.ReportDescriptor{
+var reportDescriptor = hid.Report{
 	Items: []hid.Item{
 		hid.UsagePage{Page: hid.UsagePageGenericDesktop},
 		hid.Usage{Usage: hid.UsageMouse},
@@ -155,7 +163,7 @@ var defaultDescriptor = usb.Descriptor{
 						{Type: usb.ReportDescType},
 					},
 				},
-				ReportDescriptor: reportDescriptor,
+				Report: reportDescriptor,
 			},
 			Endpoints: []usb.EndpointDescriptor{
 				{
@@ -179,6 +187,6 @@ func (m *Mouse) GetDescriptor() *usb.Descriptor {
 	return &m.descriptor
 }
 
-func (m *Mouse) GetDeviceSpecificArgs() map[string]any {
+func (x *Mouse) GetDeviceSpecificArgs() map[string]any {
 	return map[string]any{}
 }

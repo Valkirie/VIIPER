@@ -1,7 +1,7 @@
 package device
 
 type CreateOptions struct {
-	IDVendor       *uint16
-	IDProduct      *uint16
-	DeviceSpecific string
+	IdVendor       *uint16
+	IdProduct      *uint16
+	DeviceSpecific map[string]any
 }

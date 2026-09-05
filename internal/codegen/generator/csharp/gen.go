@@ -58,10 +58,6 @@ func Generate(logger *slog.Logger, outputDir string, md *meta.Metadata) error {
 		if err := generateConstants(logger, deviceDir, deviceName, md); err != nil {
 			return err
 		}
-
-		if err := generateDeviceSpecific(logger, deviceDir, deviceName, md); err != nil {
-			return err
-		}
 	}
 
 	if err := common.GenerateLicense(logger, outputDir); err != nil {

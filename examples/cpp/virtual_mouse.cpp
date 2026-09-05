@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
         // Simulate a short left click: press then release
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         stream->send(viiper::mouse::Input{
-            .buttons = viiper::mouse::BtnLeft,
+            .buttons = viiper::mouse::Btn_Left,
             .dx = 0, .dy = 0, .wheel = 0, .pan = 0,
         });
         std::this_thread::sleep_for(std::chrono::milliseconds(60));

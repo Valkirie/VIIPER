@@ -47,7 +47,7 @@ VIIPER comes in two distinct flavors:
 - **libVIIPER**  
   a single shared library to embed device emulation directly into your application  
   See Examples for C and C# [here](./examples/libVIIPER)  
-  or the [libVIIPER documentation](docs/libviiper/overview.md) for details and examples.  
+  or the [libVIIPER documentation](libviiper/overview.md) for details and examples.  
 
 For why you should pick one over the other see the [FAQ](#why-choose-the-standalone-executable-and-interfacing-via-tcp-over-the-shared-object-libviiper-library)
 
@@ -59,8 +59,7 @@ Beyond device emulation, VIIPER can proxy real USB devices for traffic inspectio
 - HID Keyboard with N-key rollover and LED feedback; see [Devices › Keyboard](docs/devices/keyboard.md)
 - HID Mouse with 5 buttons and horizontal/vertical wheel; see [Devices › Mouse](docs/devices/mouse.md)
 - PS4 controller emulation; see [Devices › DualShock 4 Controller](docs/devices/dualshock4.md)
-- PS5 DualSense controller emulation (including Edge variant); see [Devices › DualSense Controller](docs/devices/dualsense.md)
-- Nintendo Switch 2 Pro Controller emulation; see [Devices › Switch 2 Pro Controller](docs/devices/ns2pro.md)
+- 🔜 Future plugin system allows for more device types (other gamepads, specialized HID)
 
 ## 🔌 Requirements
 
@@ -119,28 +118,25 @@ See the [API documentation](./docs/api) for details
 
 - [Go](https://go.dev/) 1.26 or newer
 - USBIP installed
-- (Optional) [just](https://github.com/casey/just)
-    - Windows: `winget install --id Casey.Just --exact`
-    - Linux/macOS: `cargo install just` or use your package manager
-- Windows compiler (required for `build-libVIIPER`):
-    - `winget install -e --id MartinStorsjo.LLVM-MinGW.UCRT`
-      `--accept-package-agreements --accept-source-agreements`
+- (Optional) [Make](https://www.gnu.org/software/make/)
+    - Linux/macOS: Usually pre-installed
+    - Windows: `winget install ezwinports.make`
 
 ### 🔄 Building from Source
 
 ```bash
 git clone https://github.com/Alia5/VIIPER.git
 cd VIIPER
-just build Release
+make build
 ```
 
-The binary will be in `dist/viiper-<goos>-<goarch>` (for example `dist/viiper-windows-amd64.exe`).
+The binary will be in `dist/viiper` (or `dist/viiper.exe` on Windows).
 
 For more build options:
 
 ```bash
-just --list            # Show all available targets
-just test              # Run tests
+make help              # Show all available targets
+make test              # Run tests
 ```
 
 ---
@@ -165,8 +161,7 @@ VIIPER uses it because it's already built into Linux and available for Windows, 
 - Flexibility
     - allows one to use VIIPER as a service on the same host as the USBIP-Client and use the feeder on a different, remote machine.
     - allows for software written utilizing VIIPER to **not be** licensed under the terms of the GPLv3
-    - Allows users to idenpendently update VIIPER to receive updates and bugfixes  without affecting other components or having to recompile applications themselves.  
-       This also takes away maintenance burdens for feeder-application developers (likely you)
+    - **_future versions_**: Users can enhance VIIPER with device plugins, sharing a common wire-protocol, which can be dynamically incorporated.
 
 ### Can I use VIIPER for gaming?
 
@@ -191,7 +186,7 @@ Adding a new device type never requires touching kernel code.
 
 Yes! VIIPER's architecture is designed to be extensible.  
 Check the [xbox360 device implementation](./device/xbox360/) as a reference for creating new device types.  
-
+In the future there will be a plugin system to load and expose device types dynamically.
 
 ### You mentioned proxying USBIP?
 

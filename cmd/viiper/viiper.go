@@ -33,14 +33,14 @@ func main() {
 		kong.Name("VIIPER"),
 		kong.Description(Description()),
 		kong.UsageOnError(),
-		kong.Help(helpWithASCIIArt),
+		kong.Help(helpWithAsciiArt),
 		// Load configuration from JSON/YAML/TOML in priority order; flags/env override config values.
 		kong.Configuration(kong.JSON, jsonPaths...),
 		kong.Configuration(kongyaml.Loader, yamlPaths...),
 		kong.Configuration(kongtoml.Loader, tomlPaths...),
 	)
 
-	logger, closeFiles, err := log.SetupLogger(cli.Log.Level, cli.Log.File) // nolint
+	logger, closeFiles, err := log.SetupLogger(cli.Log.Level, cli.Log.File)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "failed to setup logger:", err)
 		os.Exit(2)
@@ -73,7 +73,7 @@ func main() {
 func handlePlainHelpFlag() {
 	for i, arg := range os.Args[1:] {
 		if arg == "-p" {
-			os.Setenv("VIIPER_HELP_STYLE", "plain") // nolint
+			os.Setenv("VIIPER_HELP_STYLE", "plain")
 			os.Args[i+1] = "-h"
 			return
 		}
@@ -93,22 +93,22 @@ func findUserConfig(args []string) string {
 }
 
 func setupRawLogger(cli *config.CLI, logger *slog.Logger, closeFiles *[]io.Closer) log.RawLogger {
-	if cli.Log.RawFile != "" { // nolint
-		f, err := os.OpenFile(cli.Log.RawFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644) // nolint
+	if cli.Log.RawFile != "" {
+		f, err := os.OpenFile(cli.Log.RawFile, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
-			logger.Error("failed to open raw log file", "file", cli.Log.RawFile, "error", err) // nolint
+			logger.Error("failed to open raw log file", "file", cli.Log.RawFile, "error", err)
 			return log.NewRaw(nil)
 		}
 		*closeFiles = append(*closeFiles, f)
 		return log.NewRaw(f)
 	}
-	if cli.Log.Level == "trace" { // nolint
+	if cli.Log.Level == "trace" {
 		return log.NewRaw(os.Stdout)
 	}
 	return log.NewRaw(nil)
 }
 
-func helpWithASCIIArt(options kong.HelpOptions, ctx *kong.Context) error {
+func helpWithAsciiArt(options kong.HelpOptions, ctx *kong.Context) error {
 	// VIIPER_HELP_STYLE env var: "plain", "big", "small", or auto-detect
 	helpStyle := strings.ToLower(os.Getenv("VIIPER_HELP_STYLE"))
 	if helpStyle == "" {

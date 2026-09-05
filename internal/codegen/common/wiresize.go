@@ -58,10 +58,9 @@ func GetWireTag(md *meta.Metadata, deviceName, direction string) *scanner.WireTa
 		return nil
 	}
 	dir := direction
-	switch direction {
-	case "input":
+	if direction == "input" {
 		dir = "c2s"
-	case "output":
+	} else if direction == "output" {
 		dir = "s2c"
 	}
 	return md.WireTags.GetTag(deviceName, dir)

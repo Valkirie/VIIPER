@@ -25,8 +25,8 @@ if ((Get-CimInstance Win32_ComputerSystem).SystemType -match "ARM") {
     $arch = "arm64"
 }
 
-$archiveName = "viiper-windows-$arch.zip"
-$downloadUrl = "https://github.com/$repo/releases/download/$version/$archiveName"
+$binaryName = "viiper-windows-$arch.exe"
+$downloadUrl = "https://github.com/$repo/releases/download/$version/$binaryName"
 
 Write-Host "Downloading from: $downloadUrl"
 $tempDir = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemType Directory -Path $_ }
@@ -34,7 +34,7 @@ $tempDir = New-TemporaryFile | ForEach-Object { Remove-Item $_; New-Item -ItemTy
 try {
     function Get-ViiperVersion($path) {
         try {
-            $help = & $path --help -p
+            $help = & $path --help -p 2>$null
             $match = ($help | Select-String -Pattern "Version:\s*([^\s]+)" -AllMatches | Select-Object -First 1)
             if ($match) {
                 return $match.Matches[0].Groups[1].Value
@@ -52,12 +52,8 @@ try {
         catch { return $null }
     }
 
-    $tempArchive = Join-Path $tempDir "release.zip"
-    Invoke-WebRequest -Uri $downloadUrl -OutFile $tempArchive -ErrorAction Stop
-
-    Expand-Archive -LiteralPath $tempArchive -DestinationPath $tempDir -Force
-
     $tempViiper = Join-Path $tempDir "viiper.exe"
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $tempViiper -ErrorAction Stop
 
     $newVersion = Get-ViiperVersion $tempViiper
     if (-not $newVersion) { $newVersion = "unknown" }
@@ -191,9 +187,6 @@ try {
     else {
         Write-Host "VIIPER server is now running and will start automatically on boot."
     }
-
-    taskkill.exe /IM "viiper.exe" /F > $null 2>&1
-    Start-Process -WindowStyle Hidden  "$installPath" -ArgumentList "server"
     
     if ($needsReboot) {
         Write-Host ""

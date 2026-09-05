@@ -1,5 +1,3 @@
-//go:build !release
-
 package cmd
 
 import (

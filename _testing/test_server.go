@@ -22,7 +22,7 @@ func NewTestServerWithConfig(t *testing.T, cfg *config.CLI) *MockServer {
 
 	logger := slog.Default()
 
-	usbServer := usb.New(cfg.Server.USBServerConfig, logger, nil)
+	usbServer := usb.New(cfg.Server.UsbServerConfig, logger, nil)
 
 	usbErrCh := make(chan error, 1)
 	go func() {
@@ -44,8 +44,8 @@ func NewTestServerWithConfig(t *testing.T, cfg *config.CLI) *MockServer {
 		UsbServer: usbServer,
 		ApiServer: api.New(
 			usbServer,
-			cfg.Server.APIServerConfig.Addr,
-			cfg.Server.APIServerConfig,
+			cfg.Server.ApiServerConfig.Addr,
+			cfg.Server.ApiServerConfig,
 			logger,
 		),
 	}
@@ -63,12 +63,12 @@ func TestServerConfig(t *testing.T) *config.CLI {
 
 	return &config.CLI{
 		Server: cmd.Server{
-			USBServerConfig: usb.ServerConfig{
+			UsbServerConfig: usb.ServerConfig{
 				Addr:              "localhost:0",
 				ConnectionTimeout: 1 * time.Second,
 				BusCleanupTimeout: 1 * time.Second,
 			},
-			APIServerConfig: api.ServerConfig{
+			ApiServerConfig: api.ServerConfig{
 				Addr:                        "localhost:0",
 				DeviceHandlerConnectTimeout: 1 * time.Second,
 				ConnectionTimeout:           1 * time.Second,

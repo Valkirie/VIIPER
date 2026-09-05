@@ -186,7 +186,7 @@ You must have a USBIP-Client implementation available on your system to use VIIP
     ```bash
     git clone https://github.com/Alia5/VIIPER.git
     cd VIIPER
-    just build-libVIIPER
+    make libVIIPER
     ```
 
     The output will be in `dist/libVIIPER/`.

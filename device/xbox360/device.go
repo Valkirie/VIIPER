@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
 	"github.com/Alia5/VIIPER/device"
@@ -13,8 +14,14 @@ import (
 )
 
 type Xbox360 struct {
-	tick       uint64
-	inputCh    chan InputState
+	gate *device.InputGate
+	tick uint64
+	// inputState is stored by value: taking its address (the previous
+	// *InputState field) forced a heap allocation on every UpdateInputState
+	// call, which at 1000 Hz input rates is measurable GC pressure. The zero
+	// value is a valid neutral report.
+	inputState InputState
+	stateMu    sync.Mutex
 	rumbleFunc func(XRumbleState)
 	descriptor usb.Descriptor
 }
@@ -26,18 +33,23 @@ type Xbox360CreateOptions struct {
 // New returns a new Xbox360 device.
 func New(o *device.CreateOptions) (*Xbox360, error) {
 	d := &Xbox360{
+		gate: device.NewInputGate(),
 		descriptor: MakeDescriptor(),
 	}
 	if o != nil {
-		if o.IDVendor != nil {
-			d.descriptor.Device.IDVendor = *o.IDVendor
+		if o.IdVendor != nil {
+			d.descriptor.Device.IDVendor = *o.IdVendor
 		}
-		if o.IDProduct != nil {
-			d.descriptor.Device.IDProduct = *o.IDProduct
+		if o.IdProduct != nil {
+			d.descriptor.Device.IDProduct = *o.IdProduct
 		}
-		if o.DeviceSpecific != "" {
+		if o.DeviceSpecific != nil {
+			data, err := json.Marshal(o.DeviceSpecific)
 			var args Xbox360CreateOptions
-			err := json.Unmarshal([]byte(o.DeviceSpecific), &args)
+			if err != nil {
+				return nil, fmt.Errorf("invalid JSON payload: %w", err)
+			}
+			err = json.Unmarshal(data, &args)
 			if err != nil {
 				return nil, fmt.Errorf("invalid JSON payload: %w", err)
 			}
@@ -46,8 +58,6 @@ func New(o *device.CreateOptions) (*Xbox360, error) {
 			}
 		}
 	}
-	d.inputCh = make(chan InputState, 1)
-	d.inputCh <- *NewInputState()
 	return d, nil
 }
 
@@ -58,11 +68,10 @@ func (x *Xbox360) SetRumbleCallback(f func(XRumbleState)) {
 
 // UpdateInputState updates the device's current input state (thread-safe).
 func (x *Xbox360) UpdateInputState(state InputState) {
-	select {
-	case <-x.inputCh:
-	default:
-	}
-	x.inputCh <- state
+	x.stateMu.Lock()
+	x.inputState = state
+	x.stateMu.Unlock()
+	x.gate.Signal()
 }
 
 // HandleTransfer implements interrupt IN/OUT for Xbox360.
@@ -70,14 +79,22 @@ func (x *Xbox360) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out
 	if dir == usbip.DirIn {
 		switch ep {
 		case 1: // 0x81 - main input reports
-			atomic.AddUint64(&x.tick, 1)
-			select {
-			case <-ctx.Done():
+			if device.GateCancelled == x.gate.Wait(ctx) {
 				return nil
-			case st := <-x.inputCh:
-				return st.BuildReport()
 			}
+			atomic.AddUint64(&x.tick, 1)
+
+			x.stateMu.Lock()
+			st := x.inputState
+			x.stateMu.Unlock()
+			return st.BuildReport()
 		default:
+			// Secondary IN endpoints (0x82 plugin module, 0x83/0x84 unused):
+			// never any data. Block until the URB is cancelled or its poll
+			// deadline fires — completing immediately with no data makes the
+			// host resubmit in a tight loop through the whole USBIP stack
+			// (the other ported devices use BlockUntilDeadline the same way).
+			device.BlockUntilDeadline(ctx)
 			return nil
 		}
 	}
@@ -214,6 +231,10 @@ func MakeDescriptor() usb.Descriptor {
 		},
 	}
 }
+
+// NaksWhenIdle reports that real wired Xbox 360 pads send input reports
+// only on state change and NAK the interrupt endpoint otherwise.
+func (x *Xbox360) NaksWhenIdle() bool { return true }
 
 func (x *Xbox360) GetDescriptor() *usb.Descriptor {
 	return &x.descriptor

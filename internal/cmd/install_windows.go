@@ -48,7 +48,7 @@ func install(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer key.Close() //nolint:errcheck
+	defer key.Close()
 
 	if err := key.SetStringValue(runValueKey, value); err != nil {
 		return err
@@ -80,7 +80,7 @@ func uninstall(logger *slog.Logger) error {
 			return err
 		}
 	} else {
-		defer key.Close() //nolint:errcheck
+		defer key.Close()
 
 		if err := key.DeleteValue(runValueKey); err != nil {
 			if !errors.Is(err, registry.ErrNotExist) {
@@ -107,7 +107,7 @@ func currentAutorunExe() (string, error) {
 		}
 		return "", err
 	}
-	defer key.Close() //nolint:errcheck
+	defer key.Close()
 
 	val, _, err := key.GetStringValue(runValueKey)
 	if err != nil {

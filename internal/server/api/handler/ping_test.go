@@ -6,12 +6,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/Alia5/VIIPER/apiclient"
+	"github.com/Alia5/VIIPER/apitypes"
 	handlerTest "github.com/Alia5/VIIPER/internal/_testing"
 	"github.com/Alia5/VIIPER/internal/server/api"
 	"github.com/Alia5/VIIPER/internal/server/api/handler"
 	"github.com/Alia5/VIIPER/internal/server/usb"
-	"github.com/Alia5/VIIPER/viiperclient"
-	"github.com/Alia5/VIIPER/viipertypes"
 )
 
 func TestPing(t *testing.T) {
@@ -20,11 +20,11 @@ func TestPing(t *testing.T) {
 	})
 	defer done()
 
-	c := viiperclient.NewTransport(addr)
+	c := apiclient.NewTransport(addr)
 	line, err := c.Do("ping", nil, nil)
 	assert.NoError(t, err)
 
-	var out viipertypes.PingResponse
+	var out apitypes.PingResponse
 	err = json.Unmarshal([]byte(line), &out)
 	assert.NoError(t, err)
 	assert.Equal(t, "VIIPER", out.Server)

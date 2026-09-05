@@ -52,7 +52,7 @@ func generateTypes(logger *slog.Logger, typesDir string, md *meta.Metadata) erro
 	if err != nil {
 		return fmt.Errorf("create file: %w", err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close()
 
 	data := struct {
 		DTOs interface{}
@@ -74,10 +74,11 @@ func fieldTypeToCSharp(field interface{}) string {
 	typeKind := v.FieldByName("TypeKind").String()
 
 	if typeKind == "map" || strings.HasPrefix(typeStr, "map[") {
-		valueType, ok := parseGoMapType(typeStr)
+		keyType, valueType, ok := parseGoMapType(typeStr)
 		if !ok {
 			return "Dictionary<string, object>"
 		}
+		_ = keyType
 		csVal := goTypeToCSharp(valueType)
 		if valueType == "any" || valueType == "interface{}" {
 			csVal = "object?"

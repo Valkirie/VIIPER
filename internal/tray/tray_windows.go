@@ -3,13 +3,11 @@
 package tray
 
 import (
-	"context"
 	_ "embed"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"runtime/debug"
 
 	"fyne.io/systray"
@@ -24,10 +22,8 @@ const (
 	runValueKey = "VIIPER"
 )
 
-func Run(ctx context.Context, shutdown func()) {
-	go systray.Run(func() {
-		runtime.LockOSThread()
-
+func Run(shutdown func()) {
+	systray.Run(func() {
 		systray.SetIcon(trayIcon)
 		systray.SetTooltip("VIIPER")
 
@@ -47,8 +43,6 @@ func Run(ctx context.Context, shutdown func()) {
 		go func() {
 			for {
 				select {
-				case <-ctx.Done():
-					return
 				case <-autoStartItem.ClickedCh:
 					if toggleAutoStart() {
 						autoStartItem.Check()
@@ -62,7 +56,6 @@ func Run(ctx context.Context, shutdown func()) {
 				}
 			}
 		}()
-
 	}, func() {})
 }
 
@@ -81,7 +74,7 @@ func autoStartEnabled() bool {
 	if err != nil {
 		return false
 	}
-	defer key.Close() //nolint:errcheck
+	defer key.Close()
 	_, _, err = key.GetStringValue(runValueKey)
 	return err == nil
 }
@@ -93,7 +86,7 @@ func toggleAutoStart() bool {
 			slog.Error("Failed to open registry key", "error", err)
 			return true
 		}
-		defer key.Close() //nolint:errcheck
+		defer key.Close()
 		_ = key.DeleteValue(runValueKey)
 		slog.Info("Auto-start disabled")
 		return false
@@ -113,7 +106,7 @@ func toggleAutoStart() bool {
 		slog.Error("Failed to create registry key", "error", err)
 		return false
 	}
-	defer key.Close() //nolint:errcheck
+	defer key.Close()
 	value := fmt.Sprintf("\"%s\" server", selfPath)
 	if err := key.SetStringValue(runValueKey, value); err != nil {
 		slog.Error("Failed to set registry value", "error", err)

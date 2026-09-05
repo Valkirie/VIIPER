@@ -1,7 +1,6 @@
 package api_test
 
 import (
-	"context"
 	"log/slog"
 	"net"
 	"testing"
@@ -18,7 +17,7 @@ type mockDevice struct {
 	name string
 }
 
-func (m *mockDevice) HandleTransfer(ctx context.Context, ep uint32, dir uint32, out []byte) []byte {
+func (m *mockDevice) HandleTransfer(ep uint32, dir uint32, out []byte) []byte {
 	return nil
 }
 func (m *mockDevice) GetDescriptor() *usb.Descriptor {

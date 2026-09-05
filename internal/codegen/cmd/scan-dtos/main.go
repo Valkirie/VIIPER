@@ -16,8 +16,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	viipertypesPkg := filepath.Join(projectRoot, "viipertypes")
-	schemas, err := scanner.ScanDTOsInPackage(viipertypesPkg)
+	apitypesPkg := filepath.Join(projectRoot, "pkg", "apitypes")
+	schemas, err := scanner.ScanDTOsInPackage(apitypesPkg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to scan DTOs: %v\n", err)
 		os.Exit(1)

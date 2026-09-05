@@ -178,7 +178,7 @@ func generateClient(logger *slog.Logger, includeDir string, md *meta.Metadata) e
 	if err != nil {
 		return fmt.Errorf("create client.hpp: %w", err)
 	}
-	defer f.Close() //nolint:errcheck
+	defer f.Close()
 
 	data := struct {
 		Header string

@@ -27,6 +27,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/pprof"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,11 +40,16 @@ import (
 
 	"github.com/Alia5/VIIPER/device"
 	"github.com/Alia5/VIIPER/device/dualsense"
+	"github.com/Alia5/VIIPER/device/dualsenseedge"
 	"github.com/Alia5/VIIPER/device/dualshock4"
 	"github.com/Alia5/VIIPER/device/ns2pro"
 	"github.com/Alia5/VIIPER/device/steamcontroller"
 	"github.com/Alia5/VIIPER/device/steamdeck"
+	"github.com/Alia5/VIIPER/device/switchpro"
 	"github.com/Alia5/VIIPER/device/xbox360"
+	"github.com/Alia5/VIIPER/device/xboxelite2"
+	"github.com/Alia5/VIIPER/device/xboxgip"
+	elite2state "github.com/Alia5/VIIPER/internal/inputstate/elite2"
 	"github.com/Alia5/VIIPER/internal/server/api"
 	usbsrv "github.com/Alia5/VIIPER/internal/server/usb"
 	"github.com/Alia5/VIIPER/usb"
@@ -63,9 +71,6 @@ var (
 
 	// feedbackCallbacks stores registered C callbacks for devices.
 	feedbackCallbacks = make(map[deviceKey]*feedbackReg)
-
-	// attachedDevices tracks which device keys have already been attached to Windows.
-	attachedDevices = make(map[deviceKey]bool)
 )
 
 type deviceKey struct {
@@ -75,7 +80,7 @@ type deviceKey struct {
 
 type deviceInfo struct {
 	dev      usb.Device
-	typeName string // resolved registry name: xbox360, dualshock4, dualsense, dualsenseedge, steamdeck, steamcontroller, ns2pro
+	typeName string // resolved registry name, e.g. "xbox360", "dualshock4", "dualsenseedge", "xboxelite2", "steamcontroller"
 }
 
 // deviceAlias describes a user-friendly device-type name and how it maps
@@ -108,7 +113,6 @@ var (
 // deviceTypeAliases maps user-friendly names to their registry type + profile.
 // If a name is not in this map, it's used as-is against the device registry.
 var deviceTypeAliases = map[string]deviceAlias{
-	// ========== Steam Deck & Handheld Platforms ==========
 	// Steam Deck and Valve 0x12Fx-range third-party handhelds. All route to
 	// the steamdeck device with a VID/PID override per platform.
 	"steamdeck":   {registryName: "steamdeck"},
@@ -126,46 +130,23 @@ var deviceTypeAliases = map[string]deviceAlias{
 	"steamdeck-generic": {registryName: "steamdeck", deprecationMsg: "'steamdeck-generic' is deprecated; use 'steamdeck' (or a specific handheld alias like 'legion-go-2')"},
 	"steam-generic":     {registryName: "steamdeck", deprecationMsg: "'steam-generic' is deprecated; use 'steamdeck' (or a specific handheld alias like 'legion-go-2')"},
 
-	// ========== Steam Controller V1 (Gordon) ==========
-	// Wired Gordon. Canonical name: "gordon".
+	// Steam Controller V1 (wired Gordon). Canonical name: "gordon".
 	"gordon":              {registryName: "steamcontroller"},
 	"steam-controller-v1": {registryName: "steamcontroller"},
 	"steam-controller":    {registryName: "steamcontroller", deprecationMsg: "'steam-controller' now refers to the wired Steam Controller V1 (Gordon); use 'steamdeck' for the Steam Deck handheld"},
 	"steamcontroller-v1":  {registryName: "steamcontroller"},
 
-	// ========== Sony DualSense ==========
+	// Xbox family.
+	"xbox-one":   {registryName: "xboxelite2", profile: "xbox-one"},
+	"xbox-elite": {registryName: "xboxelite2", profile: "xbox-one-elite"},
+
+	// Switch family.
+	"joycon-left":  {registryName: "switchpro", profile: "joycon-left"},
+	"joycon-right": {registryName: "switchpro", profile: "joycon-right"},
+
 	// Sony DualSense (regular, not Edge).
-	"dualsense":     {registryName: "dualsense"},
-	"ds5":           {registryName: "dualsense"},
-	"playstation-5": {registryName: "dualsense"},
-	"ps5":           {registryName: "dualsense"},
-
-	// Sony DualSense Edge.
-	"dualsenseedge":  {registryName: "dualsenseedge"},
-	"ds5-edge":       {registryName: "dualsenseedge"},
-	"dualsense-edge": {registryName: "dualsenseedge"},
-
-	// ========== Sony DualShock 4 ==========
-	// PlayStation 4 controller.
-	"dualshock4":     {registryName: "dualshock4"},
-	"ds4":            {registryName: "dualshock4"},
-	"ps4":            {registryName: "dualshock4"},
-	"ps4-controller": {registryName: "dualshock4"},
-	"playstation-4":  {registryName: "dualshock4"},
-
-	// ========== Xbox 360 Controller ==========
-	"xbox360":  {registryName: "xbox360"},
-	"xbox-360": {registryName: "xbox360"},
-	"x360":     {registryName: "xbox360"},
-	"360":      {registryName: "xbox360"},
-
-	// ========== Nintendo Switch Pro ==========
-	// Official Pro Controller (non-wireless gateway).
-	"ns2pro":          {registryName: "ns2pro"},
-	"switch-pro":      {registryName: "ns2pro"},
-	"ns-pro":          {registryName: "ns2pro"},
-	"pro-controller":  {registryName: "ns2pro"},
-	"nintendo-switch": {registryName: "ns2pro"},
+	"dualsense": {registryName: "dualsense"},
+	"ds5":       {registryName: "dualsense"},
 }
 
 // deprecationOnce ensures each deprecation warning fires at most once per
@@ -186,15 +167,15 @@ func applyAlias(tn string, opts *device.CreateOptions) string {
 		return tn
 	}
 	if alias.profile != "" {
-		opts.DeviceSpecific = `{"profile":"` + alias.profile + `"}`
+		opts.DeviceSpecific = map[string]any{"profile": alias.profile}
 	}
-	if alias.vidOverride != nil && opts.IDVendor == nil {
+	if alias.vidOverride != nil && opts.IdVendor == nil {
 		v := *alias.vidOverride
-		opts.IDVendor = &v
+		opts.IdVendor = &v
 	}
-	if alias.pidOverride != nil && opts.IDProduct == nil {
+	if alias.pidOverride != nil && opts.IdProduct == nil {
 		p := *alias.pidOverride
-		opts.IDProduct = &p
+		opts.IdProduct = &p
 	}
 	if alias.deprecationMsg != "" {
 		warnDeprecatedAlias(tn, alias.deprecationMsg)
@@ -202,40 +183,12 @@ func applyAlias(tn string, opts *device.CreateOptions) string {
 	return alias.registryName
 }
 
-func attachDeviceToWindows(bid, did uint32) error {
-	key := deviceKey{busID: bid, devID: did}
-	if attachedDevices[key] {
-		return nil
-	}
-
-	port := server.GetListenPort()
-	if port == 0 {
-		return fmt.Errorf("server listen port not available")
-	}
-
-	exportMeta := &usbip.ExportMeta{BusID: bid, DevID: did}
-	logger := slog.Default()
-
-	mu.Unlock()
-	err := api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-	if err != nil {
-		slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-	}
-	mu.Lock()
-
-	if err == nil {
-		attachedDevices[key] = true
-	}
-
-	return err
-}
-
 // hiddenDeviceTypes are device types from the registry that should not appear
 // in the user-facing device type list (non-controller devices).
 var hiddenDeviceTypes = map[string]bool{
 	"keyboard": true,
 	"mouse":    true,
+	"xboxgip":  true,
 }
 
 type feedbackReg struct {
@@ -280,6 +233,58 @@ func viiper_last_error() *C.char {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
+// CPU profiling hook: when VIIPER_CPUPROFILE is set, every init/shutdown
+// cycle writes one pprof file "<value>.<n>" (n increments per cycle, so
+// benchmark iterations don't overwrite each other).
+var (
+	cpuProfileFile  *os.File
+	cpuProfileCount int
+)
+
+func maybeStartCPUProfile() {
+	base := os.Getenv("VIIPER_CPUPROFILE")
+	if base == "" {
+		return
+	}
+	cpuProfileCount++
+	f, err := os.Create(fmt.Sprintf("%s.%d", base, cpuProfileCount))
+	if err != nil {
+		slog.Error("cpuprofile: create failed", "error", err)
+		return
+	}
+	if err := pprof.StartCPUProfile(f); err != nil {
+		slog.Error("cpuprofile: start failed", "error", err)
+		_ = f.Close()
+		return
+	}
+	cpuProfileFile = f
+}
+
+func maybeStopCPUProfile() {
+	if cpuProfileFile == nil {
+		return
+	}
+	pprof.StopCPUProfile()
+	_ = cpuProfileFile.Close()
+	cpuProfileFile = nil
+}
+
+// idleModeFromEnv resolves the idle-endpoint mode: VIIPER_IDLE_MODE
+// (auto|nak|keepalive) wins; the older VIIPER_NAK_IDLE=1/0 is honored for
+// compatibility; default is "auto" (per-device).
+func idleModeFromEnv() string {
+	if m := os.Getenv("VIIPER_IDLE_MODE"); m != "" {
+		return m
+	}
+	switch os.Getenv("VIIPER_NAK_IDLE") {
+	case "1":
+		return "nak"
+	case "0":
+		return "keepalive"
+	}
+	return "auto"
+}
+
 //export viiper_init
 func viiper_init(listenAddr *C.char) C.int {
 	mu.Lock()
@@ -292,6 +297,17 @@ func viiper_init(listenAddr *C.char) C.int {
 	addr := C.GoString(listenAddr)
 	if addr == "" {
 		addr = "0.0.0.0:3241"
+	}
+
+	// The embedded server runs a handful of goroutines; on big machines the
+	// default GOMAXPROCS=NumCPU only adds scheduler and netpoller overhead.
+	// VIIPER_GOMAXPROCS overrides; GOGC/GOMEMLIMIT work as usual via env.
+	if v := os.Getenv("VIIPER_GOMAXPROCS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			runtime.GOMAXPROCS(n)
+		}
+	} else if runtime.NumCPU() > 4 {
+		runtime.GOMAXPROCS(4)
 	}
 
 	// Set up file-based logging next to the DLL for protocol debugging.
@@ -308,7 +324,11 @@ func viiper_init(listenAddr *C.char) C.int {
 		Addr:                    addr,
 		ConnectionTimeout:       30 * time.Second,
 		BusCleanupTimeout:       5 * time.Second,
-		WriteBatchFlushInterval: 1 * time.Millisecond,
+		WriteBatchFlushInterval: 0, // immediate writes — data-driven completion makes batching counterproductive
+		// Default ON (matches real-hardware poll pacing; confirmed cheaper in
+		// EmulationBench). VIIPER_HW_PACED=0 restores data-driven completion.
+		HardwarePacedCompletions: os.Getenv("VIIPER_HW_PACED") != "0",
+		IdleMode:                 idleModeFromEnv(),
 	}
 
 	server = usbsrv.New(cfg, logger, nil)
@@ -321,6 +341,8 @@ func viiper_init(listenAddr *C.char) C.int {
 
 	// Wait for the server to be ready (listener bound).
 	<-server.Ready()
+
+	maybeStartCPUProfile()
 
 	return 0
 }
@@ -342,10 +364,12 @@ func viiper_shutdown() {
 	_ = server.Close()
 	server = nil
 
+	maybeStopCPUProfile()
+
 	// Clear device tracking.
 	devices = make(map[deviceKey]*deviceInfo)
-	attachedDevices = make(map[deviceKey]bool)
 	feedbackCallbacks = make(map[deviceKey]*feedbackReg)
+	clearX360Handles()
 }
 
 // ---------------------------------------------------------------------------
@@ -361,7 +385,7 @@ func viiper_bus_create(busID C.uint32_t) C.int {
 		return setError(fmt.Errorf("not initialized"))
 	}
 
-	bus, err := virtualbus.NewWithBusID(uint32(busID))
+	bus, err := virtualbus.NewWithBusId(uint32(busID))
 	if err != nil {
 		return setError(err)
 	}
@@ -390,7 +414,6 @@ func viiper_bus_remove(busID C.uint32_t) C.int {
 		if k.busID == bid {
 			delete(devices, k)
 			delete(feedbackCallbacks, k)
-			delete(attachedDevices, k)
 		}
 	}
 
@@ -447,7 +470,7 @@ func viiper_device_add(busID C.uint32_t, typeName *C.char, outDeviceID *C.uint32
 	var devID uint32
 	for _, m := range metas {
 		if m.Dev == dev {
-			devID = m.Meta.DevID
+			devID = m.Meta.DevId
 			break
 		}
 	}
@@ -464,12 +487,31 @@ func viiper_device_add(busID C.uint32_t, typeName *C.char, outDeviceID *C.uint32
 	}
 
 	// Auto-attach the device via usbip-win2 so it appears in Windows.
-	// Done synchronously so the device is fully attached before the caller
-	// starts sending input.
-	if err := attachDeviceToWindows(bid, devID); err != nil {
-		slog.Error("auto-attach failed", "error", err)
-		// Device was added but attach failed — not a fatal error.
-		// The caller can retry with viiper_device_attach.
+	// Done synchronously (after releasing the mutex) so the device is fully
+	// attached before the caller starts sending input.
+	port := server.GetListenPort()
+	if port > 0 {
+		exportMeta := &usbip.ExportMeta{
+			BusId: bid,
+			DevId: devID,
+		}
+		logger := slog.Default()
+
+		// Release the mutex before the blocking attach call — the USBIP
+		// server needs to handle the incoming connection.
+		mu.Unlock()
+		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
+		if err != nil {
+			slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
+			err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
+		}
+		mu.Lock()
+
+		if err != nil {
+			slog.Error("auto-attach failed", "error", err)
+			// Device was added but attach failed — not a fatal error.
+			// The caller can retry with viiper_device_attach.
+		}
 	}
 
 	return 0
@@ -495,11 +537,11 @@ func viiper_device_add_ex(busID C.uint32_t, typeName *C.char, vid C.uint16_t, pi
 	var opts device.CreateOptions
 	if vid != 0 {
 		v := uint16(vid)
-		opts.IDVendor = &v
+		opts.IdVendor = &v
 	}
 	if pid != 0 {
 		p := uint16(pid)
-		opts.IDProduct = &p
+		opts.IdProduct = &p
 	}
 	registryName := applyAlias(tn, &opts)
 
@@ -527,7 +569,7 @@ func viiper_device_add_ex(busID C.uint32_t, typeName *C.char, vid C.uint16_t, pi
 	var devID uint32
 	for _, m := range metas {
 		if m.Dev == dev {
-			devID = m.Meta.DevID
+			devID = m.Meta.DevId
 			break
 		}
 	}
@@ -542,8 +584,25 @@ func viiper_device_add_ex(busID C.uint32_t, typeName *C.char, vid C.uint16_t, pi
 		*outDeviceID = C.uint32_t(devID)
 	}
 
-	if err := attachDeviceToWindows(bid, devID); err != nil {
-		slog.Error("auto-attach failed", "error", err)
+	port := server.GetListenPort()
+	if port > 0 {
+		exportMeta := &usbip.ExportMeta{
+			BusId: bid,
+			DevId: devID,
+		}
+		logger := slog.Default()
+
+		mu.Unlock()
+		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
+		if err != nil {
+			slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
+			err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
+		}
+		mu.Lock()
+
+		if err != nil {
+			slog.Error("auto-attach failed", "error", err)
+		}
 	}
 
 	return 0
@@ -564,7 +623,23 @@ func viiper_device_attach(busID C.uint32_t, deviceID C.uint32_t) C.int {
 	bid := uint32(busID)
 	did := uint32(deviceID)
 
-	err := attachDeviceToWindows(bid, did)
+	port := server.GetListenPort()
+	if port == 0 {
+		return setError(fmt.Errorf("server listen port not available"))
+	}
+
+	exportMeta := &usbip.ExportMeta{
+		BusId: bid,
+		DevId: did,
+	}
+	logger := slog.Default()
+
+	// Try native IOCTL first, then fall back to usbip.exe command.
+	err := api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
+	if err != nil {
+		slog.Warn("attach via IOCTL failed, trying usbip.exe", "error", err)
+		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
+	}
 	if err != nil {
 		return setError(fmt.Errorf("attach device: %w", err))
 	}
@@ -587,7 +662,6 @@ func viiper_device_remove(busID C.uint32_t, deviceID C.uint32_t) C.int {
 	key := deviceKey{busID: bid, devID: did}
 	delete(devices, key)
 	delete(feedbackCallbacks, key)
-	delete(attachedDevices, key)
 
 	didStr := fmt.Sprintf("%d", did)
 	if err := server.RemoveDeviceByID(bid, didStr); err != nil {
@@ -644,64 +718,130 @@ func viiper_device_set_input(busID C.uint32_t, deviceID C.uint32_t, data *C.uint
 		return setError(fmt.Errorf("device %d-%d not found", busID, deviceID))
 	}
 
-	buf := C.GoBytes(unsafe.Pointer(data), length)
+	// Zero-copy view of the caller's buffer: decoded synchronously under mu
+	// and never retained, so no C.GoBytes heap copy is needed.
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(data)), int(length))
+	return setError(applyInput(info, buf))
+}
 
+// applyInput decodes a wire-format input buffer and applies it to the
+// device. Shared by the generic (mutex-guarded) set_input entry point and
+// the lock-free handle-based fast path. buf is not retained.
+func applyInput(info *deviceInfo, buf []byte) error {
 	switch info.typeName {
 	case "xbox360":
 		xdev, ok := info.dev.(*xbox360.Xbox360)
 		if !ok {
-			return setError(fmt.Errorf("device type mismatch"))
+			return fmt.Errorf("device type mismatch")
 		}
 		var state xbox360.InputState
 		if err := state.UnmarshalBinary(buf); err != nil {
-			return setError(err)
+			return err
 		}
 		xdev.UpdateInputState(state)
 
 	case "dualshock4":
 		ds4, ok := info.dev.(*dualshock4.DualShock4)
 		if !ok {
-			return setError(fmt.Errorf("device type mismatch"))
+			return fmt.Errorf("device type mismatch")
 		}
 		var state dualshock4.InputState
 		if err := state.UnmarshalBinary(buf); err != nil {
-			return setError(err)
+			return err
 		}
 		ds4.UpdateInputState(&state)
 
-	case "dualsense", "dualsenseedge":
+	case "dualsenseedge":
+		dse, ok := info.dev.(*dualsenseedge.DualSenseEdge)
+		if !ok {
+			return fmt.Errorf("device type mismatch")
+		}
+		var state dualsenseedge.InputState
+		if err := state.UnmarshalBinary(buf); err != nil {
+			return err
+		}
+		dse.UpdateInputState(&state)
+
+	case "dualsense":
 		ds, ok := info.dev.(*dualsense.DualSense)
 		if !ok {
-			return setError(fmt.Errorf("device type mismatch"))
+			return fmt.Errorf("device type mismatch")
 		}
 		var state dualsense.InputState
 		if err := state.UnmarshalBinary(buf); err != nil {
-			return setError(err)
+			return err
 		}
 		ds.UpdateInputState(&state)
 
 	case "steamdeck":
 		sd, ok := info.dev.(*steamdeck.SteamDeck)
 		if !ok {
-			return setError(fmt.Errorf("device type mismatch"))
+			return fmt.Errorf("device type mismatch")
 		}
 		var state steamdeck.InputState
 		if err := state.UnmarshalBinary(buf); err != nil {
-			return setError(err)
+			return err
 		}
 		sd.UpdateInputState(&state)
+
+	case "xboxelite2":
+		xe2, ok := info.dev.(*xboxelite2.XboxElite2)
+		if !ok {
+			return fmt.Errorf("device type mismatch")
+		}
+		var state elite2state.InputState
+		var err error
+		switch len(buf) {
+		case elite2state.InputStateSize:
+			err = state.UnmarshalBinary(buf)
+		case elite2state.InputStateV1Size:
+			err = state.UnmarshalV1Binary(buf)
+		case elite2state.LegacyInputStateSize:
+			err = state.UnmarshalLegacyBinary(buf)
+		default:
+			err = fmt.Errorf(
+				"invalid xboxelite2 input size: got %d (expected %d, %d, or %d)",
+				len(buf), elite2state.InputStateSize, elite2state.InputStateV1Size, elite2state.LegacyInputStateSize,
+			)
+		}
+		if err != nil {
+			return err
+		}
+		xe2.UpdateInputState(&state)
 
 	case "steamcontroller":
 		sc, ok := info.dev.(*steamcontroller.SteamController)
 		if !ok {
-			return setError(fmt.Errorf("device type mismatch"))
+			return fmt.Errorf("device type mismatch")
 		}
 		// Gordon uses its native 64-byte input format.
 		var state steamcontroller.InputState
 		if err := state.UnmarshalBinary(buf); err != nil {
-			return setError(err)
+			return err
 		}
 		sc.UpdateInputState(&state)
+
+	case "switchpro":
+		sp, ok := info.dev.(*switchpro.SwitchPro)
+		if !ok {
+			return fmt.Errorf("device type mismatch")
+		}
+		var state switchpro.InputState
+		if err := state.UnmarshalBinary(buf); err != nil {
+			return err
+		}
+		sp.UpdateInputState(&state)
+
+	case "xboxgip":
+		xdev, ok := info.dev.(*xboxgip.XboxGIP)
+		if !ok {
+			return fmt.Errorf("device type mismatch")
+		}
+		var state xboxgip.InputState
+		if err := state.UnmarshalBinary(buf); err != nil {
+			return err
+		}
+		xdev.UpdateInputState(&state)
 
 	case "ns2pro":
 		// Switch 2 Pro Controller: 27-byte wire (Buttons:u32, LX/LY/RX/RY:u16
@@ -710,20 +850,21 @@ func viiper_device_set_input(busID C.uint32_t, deviceID C.uint32_t, data *C.uint
 		// (not pointer) to match the port's API.
 		ns2, ok := info.dev.(*ns2pro.NS2Pro)
 		if !ok {
-			return setError(fmt.Errorf("device type mismatch"))
+			return fmt.Errorf("device type mismatch")
 		}
 		var state ns2pro.InputState
 		if err := state.UnmarshalBinary(buf); err != nil {
-			return setError(err)
+			return err
 		}
 		ns2.UpdateInputState(state)
 
 	default:
-		return setError(fmt.Errorf("input not supported for device type: %s", info.typeName))
+		return fmt.Errorf("input not supported for device type: %s", info.typeName)
 	}
 
-	return 0
+	return nil
 }
+
 
 // ---------------------------------------------------------------------------
 // Feedback callbacks
@@ -777,7 +918,20 @@ func viiper_device_set_feedback_callback(busID C.uint32_t, deviceID C.uint32_t, 
 			invokeFeedbackCallback(bid, did, data)
 		})
 
-	case "dualsense", "dualsenseedge":
+	case "dualsenseedge":
+		dse, ok := info.dev.(*dualsenseedge.DualSenseEdge)
+		if !ok {
+			return setError(fmt.Errorf("device type mismatch"))
+		}
+		dse.SetOutputCallback(func(output dualsenseedge.OutputState) {
+			data, err := output.MarshalBinary()
+			if err != nil {
+				return
+			}
+			invokeFeedbackCallback(bid, did, data)
+		})
+
+	case "dualsense":
 		ds, ok := info.dev.(*dualsense.DualSense)
 		if !ok {
 			return setError(fmt.Errorf("device type mismatch"))
@@ -803,12 +957,51 @@ func viiper_device_set_feedback_callback(busID C.uint32_t, deviceID C.uint32_t, 
 			invokeFeedbackCallback(bid, did, data)
 		})
 
+	case "xboxelite2":
+		xe2, ok := info.dev.(*xboxelite2.XboxElite2)
+		if !ok {
+			return setError(fmt.Errorf("device type mismatch"))
+		}
+		xe2.SetOutputCallback(func(output elite2state.OutputState) {
+			data, err := output.MarshalBinary()
+			if err != nil {
+				return
+			}
+			invokeFeedbackCallback(bid, did, data)
+		})
+
 	case "steamcontroller":
 		sc, ok := info.dev.(*steamcontroller.SteamController)
 		if !ok {
 			return setError(fmt.Errorf("device type mismatch"))
 		}
 		sc.SetOutputCallback(func(output steamcontroller.OutputState) {
+			data, err := output.MarshalBinary()
+			if err != nil {
+				return
+			}
+			invokeFeedbackCallback(bid, did, data)
+		})
+
+	case "switchpro":
+		sp, ok := info.dev.(*switchpro.SwitchPro)
+		if !ok {
+			return setError(fmt.Errorf("device type mismatch"))
+		}
+		sp.SetOutputCallback(func(output switchpro.OutputState) {
+			data, err := output.MarshalBinary()
+			if err != nil {
+				return
+			}
+			invokeFeedbackCallback(bid, did, data)
+		})
+
+	case "xboxgip":
+		xdev, ok := info.dev.(*xboxgip.XboxGIP)
+		if !ok {
+			return setError(fmt.Errorf("device type mismatch"))
+		}
+		xdev.SetOutputCallback(func(output xboxgip.OutputState) {
 			data, err := output.MarshalBinary()
 			if err != nil {
 				return
