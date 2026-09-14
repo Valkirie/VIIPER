@@ -60,6 +60,8 @@ type attachIOCTL struct {
 	BusID      [32]byte
 	Service    [niMaxServ]byte
 	Host       [niMaxHost]byte
+	Serial     [16]byte
+	WskEvents  byte
 }
 
 const (
@@ -137,7 +139,7 @@ func attachViaIOCTL(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usb
 		(*byte)(unsafe.Pointer(&ioctlData)),
 		uint32(unsafe.Sizeof(ioctlData)),
 		(*byte)(unsafe.Pointer(&ioctlData)),
-		uint32(unsafe.Sizeof(ioctlData)),
+		uint32(unsafe.Offsetof(ioctlData.PortOutput)+unsafe.Sizeof(ioctlData.PortOutput)),
 		&bytesReturned,
 		nil,
 	)
