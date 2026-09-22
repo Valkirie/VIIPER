@@ -49,8 +49,9 @@ var deviceGUID = windows.GUID{
 }
 
 const (
-	niMaxHost = 1025
-	niMaxServ = 32
+	niMaxHost   = 1025
+	niMaxServ   = 32
+	niMaxSerial = 16
 )
 
 // PLUGIN_HARDWARE structure from usbip-win2
@@ -60,8 +61,9 @@ type attachIOCTL struct {
 	BusID      [32]byte
 	Service    [niMaxServ]byte
 	Host       [niMaxHost]byte
-	Serial     [16]byte
-	WskEvents  byte
+	Serial     [niMaxSerial]byte
+	WskEvents  bool
+	_          [3]byte // Extra padding needed
 }
 
 const (
