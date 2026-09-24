@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -54,8 +55,17 @@ const (
 	niMaxSerial = 16
 )
 
-// PLUGIN_HARDWARE structure from usbip-win2
-type attachIOCTL struct {
+// PLUGIN_HARDWARE structure from usbip-win2 0.9.7
+type attachIOCTL_97 struct { // nolint
+	Size       uint32
+	PortOutput int32
+	BusID      [32]byte
+	Service    [niMaxServ]byte
+	Host       [niMaxHost]byte
+}
+
+// PLUGIN_HARDWARE structure from usbip-win2 0.9.8+
+type attachIOCTL_98Plus struct { // nolint
 	Size       uint32
 	PortOutput int32
 	BusID      [32]byte
@@ -63,7 +73,7 @@ type attachIOCTL struct {
 	Host       [niMaxHost]byte
 	Serial     [niMaxSerial]byte
 	WskEvents  bool
-	_          [3]byte // Extra padding needed
+	_          [3]byte
 }
 
 const (
@@ -97,7 +107,7 @@ func attachViaIOCTL(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usb
 
 	logger.Debug("Found usbip-win2 device", "path", devicePath)
 
-	var ioctlData attachIOCTL
+	var ioctlData attachIOCTL_98Plus
 	ioctlData.Size = uint32(unsafe.Sizeof(ioctlData))
 
 	busID := fmt.Sprintf("%d-%d", deviceExportMeta.BusId, deviceExportMeta.DevId)
@@ -146,7 +156,41 @@ func attachViaIOCTL(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usb
 		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("IOControl: DeviceIoControl failed: %w", err)
+		if strings.Contains(err.Error(), "supplied user buffer is not valid") {
+			logger.Info("User is running older version of USBIP-Win2: Falling back", "error", err)
+
+			ioctlData97 := attachIOCTL_97{}
+			ioctlData97.Size = uint32(unsafe.Sizeof(ioctlData97))
+
+			busID := fmt.Sprintf("%d-%d", deviceExportMeta.BusId, deviceExportMeta.DevId)
+			if len(busID) >= len(ioctlData97.BusID) {
+				return fmt.Errorf("argumentValidation: bus ID too long: %s", busID)
+			}
+			copy(ioctlData97.BusID[:], busID)
+
+			service := fmt.Sprintf("%d", usbipServerPort)
+			if len(service) >= len(ioctlData97.Service) {
+				return fmt.Errorf("argumentValidation: service string too long: %s", service)
+			}
+			copy(ioctlData97.Service[:], service)
+			copy(ioctlData97.Host[:], "localhost")
+			err = windows.DeviceIoControl(
+				handle,
+				ioctlPluginHardware,
+				(*byte)(unsafe.Pointer(&ioctlData97)),
+				uint32(unsafe.Sizeof(ioctlData97)),
+				(*byte)(unsafe.Pointer(&ioctlData97)),
+				uint32(unsafe.Sizeof(ioctlData97)),
+				&bytesReturned,
+				nil,
+			)
+			if err != nil {
+				return fmt.Errorf("IOControl: DeviceIoControl failed with attachIOCTL_97: %w", err)
+			}
+			ioctlData.PortOutput = ioctlData97.PortOutput
+		} else {
+			return fmt.Errorf("IOControl: DeviceIoControl failed: %w", err)
+		}
 	}
 
 	logger.Debug("IOCTL completed", "bytesReturned", bytesReturned, "portOutput", ioctlData.PortOutput)
