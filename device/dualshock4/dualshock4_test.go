@@ -386,6 +386,7 @@ func TestFeedback(t *testing.T) {
 		{
 			name: "off",
 			outputState: dualshock4.OutputState{
+				UpdateFlags: 0,
 				RumbleSmall: 0,
 				RumbleLarge: 0,
 				LedRed:      0,
@@ -399,6 +400,7 @@ func TestFeedback(t *testing.T) {
 		{
 			name: "rumble + led + flash",
 			outputState: dualshock4.OutputState{
+				UpdateFlags: 0x07,
 				RumbleSmall: 0x12,
 				RumbleLarge: 0xFE,
 				LedRed:      0x01,
@@ -407,7 +409,7 @@ func TestFeedback(t *testing.T) {
 				FlashOn:     0x04,
 				FlashOff:    0x05,
 			},
-			outPacket: []byte{0x05, 0x00, 0x00, 0x00, 0x12, 0xFE, 0x01, 0x02, 0x03, 0x04, 0x05},
+			outPacket: []byte{0x05, 0x07, 0x00, 0x00, 0x12, 0xFE, 0x01, 0x02, 0x03, 0x04, 0x05},
 		},
 	}
 
@@ -458,7 +460,7 @@ func TestFeedback(t *testing.T) {
 			if !assert.NoError(t, usbipClient.Submit(imp.Conn, usbip.DirOut, 3, tc.outPacket, nil)) {
 				return
 			}
-			var buf [7]byte
+			var buf [8]byte
 			_ = stream.SetReadDeadline(time.Now().Add(750 * time.Millisecond))
 			_, err := io.ReadFull(stream, buf[:])
 			if !assert.NoError(t, err) {
