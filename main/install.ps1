@@ -109,7 +109,7 @@ try {
     Write-Host ""
     Write-Host "Checking USBIP drivers..." -ForegroundColor Cyan
 
-    $usbipTargetVersion = [Version]"0.9.7.7"
+    $usbipTargetVersion = [Version]"0.9.8.1"
     $usbipInstalledVersion = $null
 
     $usbipEntry = Get-ItemProperty "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
@@ -150,7 +150,7 @@ try {
     if ($needsUsbipInstall) {
         Write-Host "This requires administrator privileges." -ForegroundColor Yellow
 
-        $usbipInstallerUrl = "https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.7.7/USBip-0.9.7.7-x64.exe"
+        $usbipInstallerUrl = "https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe"
         $usbipInstaller = Join-Path $tempDir "USBip-setup.exe"
 
         try {
