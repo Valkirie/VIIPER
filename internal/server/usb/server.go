@@ -740,7 +740,8 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 						continue
 					}
 					// Device answered "no data" without blocking.
-					break
+					<-job.ctx.Done()
+					return
 				}
 
 				pendingMu.Lock()
