@@ -740,7 +740,8 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 						continue
 					}
 					// Device answered "no data" without blocking.
-					break
+					<-job.ctx.Done()
+					return
 				}
 
 				pendingMu.Lock()
@@ -910,6 +911,7 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 		actualLen := uint32(len(respData))
 		if dir == usbip.DirOut {
 			actualLen = uint32(len(outPayload))
+			respData = nil
 		}
 		if err := writeRet(seq, urbStatus, actualLen, respData, ep == 0); err != nil {
 			return err

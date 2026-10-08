@@ -37,7 +37,7 @@ const usbReportTimestampStep = 188
 
 func New(o *device.CreateOptions) (*DualShock4, error) {
 	d := &DualShock4{
-		gate: device.NewInputGate(),
+		gate:       device.NewInputGate(),
 		descriptor: defaultDescriptor,
 		now:        time.Now,
 	}
@@ -134,6 +134,7 @@ func (d *DualShock4) HandleTransfer(ctx context.Context, ep uint32, dir uint32, 
 	if dir == usbip.DirOut && ep == 3 {
 		if len(out) >= 11 && out[OutOffsetReportID] == ReportIDOutput {
 			feedback := OutputState{
+				UpdateFlags: out[OutOffsetFlags],
 				RumbleSmall: out[OutOffsetRumbleSmall],
 				RumbleLarge: out[OutOffsetRumbleLarge],
 				LedRed:      out[OutOffsetLedRed],
@@ -195,6 +196,7 @@ func (d *DualShock4) HandleControl(bmRequestType, bRequest uint8, wValue, _ /* w
 	if bmRequestType == 0x21 && bRequest == hidSetReport {
 		if reportType == reportTypeOutput && reportID == ReportIDOutput && len(data) >= 11 {
 			feedback := OutputState{
+				UpdateFlags: data[OutOffsetFlags],
 				RumbleSmall: data[OutOffsetRumbleSmall],
 				RumbleLarge: data[OutOffsetRumbleLarge],
 				LedRed:      data[OutOffsetLedRed],
