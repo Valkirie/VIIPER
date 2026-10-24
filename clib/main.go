@@ -333,19 +333,26 @@ func viiper_init(listenAddr *C.char) C.int {
 
 	server = usbsrv.New(cfg, logger, nil)
 
-	go func() {
-		if err := server.ListenAndServe(); err != nil {
-			slog.Error("USBIP server error", "error", err)
-		}
-	}()
-
-	// Wait for the server to be ready (listener bound).
-	<-server.Ready()
+	serving := server
+	serveError := make(chan error, 1)
+	go func() { serveError <- serving.ListenAndServe() }()
+	select {
+	case <-serving.Ready():
+	case err := <-serveError:
+		server = nil
+		return setError(fmt.Errorf("listen: %w", err))
+	}
 
 	maybeStartCPUProfile()
 
 	return 0
 }
+
+// viiper_managed_abi version 1 guarantees export-only device creation.
+// The caller owns driver attachment and detachment; no CLI fallback is used.
+//
+//export viiper_managed_abi
+func viiper_managed_abi() C.int { return 1 }
 
 //export viiper_shutdown
 func viiper_shutdown() {
@@ -486,34 +493,6 @@ func viiper_device_add(busID C.uint32_t, typeName *C.char, outDeviceID *C.uint32
 		*outDeviceID = C.uint32_t(devID)
 	}
 
-	// Auto-attach the device via usbip-win2 so it appears in Windows.
-	// Done synchronously (after releasing the mutex) so the device is fully
-	// attached before the caller starts sending input.
-	port := server.GetListenPort()
-	if port > 0 {
-		exportMeta := &usbip.ExportMeta{
-			BusId: bid,
-			DevId: devID,
-		}
-		logger := slog.Default()
-
-		// Release the mutex before the blocking attach call — the USBIP
-		// server needs to handle the incoming connection.
-		mu.Unlock()
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-		if err != nil {
-			slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
-			err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-		}
-		mu.Lock()
-
-		if err != nil {
-			slog.Error("auto-attach failed", "error", err)
-			// Device was added but attach failed — not a fatal error.
-			// The caller can retry with viiper_device_attach.
-		}
-	}
-
 	return 0
 }
 
@@ -584,32 +563,11 @@ func viiper_device_add_ex(busID C.uint32_t, typeName *C.char, vid C.uint16_t, pi
 		*outDeviceID = C.uint32_t(devID)
 	}
 
-	port := server.GetListenPort()
-	if port > 0 {
-		exportMeta := &usbip.ExportMeta{
-			BusId: bid,
-			DevId: devID,
-		}
-		logger := slog.Default()
-
-		mu.Unlock()
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-		if err != nil {
-			slog.Warn("auto-attach via IOCTL failed, trying usbip.exe", "error", err)
-			err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-		}
-		mu.Lock()
-
-		if err != nil {
-			slog.Error("auto-attach failed", "error", err)
-		}
-	}
-
 	return 0
 }
 
 // viiper_device_attach explicitly attaches a device to Windows via the usbip-win2 client.
-// This is called automatically by viiper_device_add, but can be called separately if needed.
+// Device creation is export-only; managed callers should own attachment instead.
 //
 //export viiper_device_attach
 func viiper_device_attach(busID C.uint32_t, deviceID C.uint32_t) C.int {
@@ -634,12 +592,7 @@ func viiper_device_attach(busID C.uint32_t, deviceID C.uint32_t) C.int {
 	}
 	logger := slog.Default()
 
-	// Try native IOCTL first, then fall back to usbip.exe command.
 	err := api.AttachLocalhostClient(context.Background(), exportMeta, port, true, logger)
-	if err != nil {
-		slog.Warn("attach via IOCTL failed, trying usbip.exe", "error", err)
-		err = api.AttachLocalhostClient(context.Background(), exportMeta, port, false, logger)
-	}
 	if err != nil {
 		return setError(fmt.Errorf("attach device: %w", err))
 	}
@@ -864,7 +817,6 @@ func applyInput(info *deviceInfo, buf []byte) error {
 
 	return nil
 }
-
 
 // ---------------------------------------------------------------------------
 // Feedback callbacks

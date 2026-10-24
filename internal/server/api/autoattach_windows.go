@@ -4,11 +4,8 @@ package api
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
-	"strconv"
 	"syscall"
 	"unsafe"
 
@@ -118,14 +115,11 @@ const (
 	methodBuffered      = 0
 	fileReadData        = 0x0001
 	fileWriteData       = 0x0002
-	ioctlPluginHardware = (fileDeviceUnknown << 16) | ((fileReadData | fileWriteData) << 14) | (0x800 << 2) | methodBuffered
+	ioctlPluginHardware = (fileDeviceUnknown << 16) | ((fileReadData | fileWriteData) << 14) | (0x806 << 2) | methodBuffered
 )
 
 func attachLocalhostClientImpl(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usbipServerPort uint16, useNativeIOCTL bool, logger *slog.Logger) error {
-	if useNativeIOCTL {
-		return attachViaIOCTL(ctx, deviceExportMeta, usbipServerPort, logger)
-	}
-	return attachViaCommand(ctx, deviceExportMeta, usbipServerPort, logger)
+	return attachViaIOCTL(ctx, deviceExportMeta, usbipServerPort, logger)
 }
 
 func attachViaIOCTL(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usbipServerPort uint16, logger *slog.Logger) error {
@@ -180,27 +174,15 @@ func attachViaIOCTL(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usb
 
 	logger.Debug("Opened device handle")
 
-	var portOutput int32
-	var bytesReturned uint32
-	for _, req := range []attachIOCTL{
-		&attachIOCTL_981{},
-		&attachIOCTL_980{},
-		&attachIOCTL_978{},
-		&attachIOCTL_977{},
-	} {
-		portOutput, bytesReturned, err = req.connectHardware(handle, loc)
-		if !errors.Is(err, windows.ERROR_INVALID_USER_BUFFER) {
-			break
-		}
-		logger.Info("User is running older version of USBIP-Win2: Falling back", "error", err)
-	}
+	req := attachIOCTL_981{}
+	portOutput, bytesReturned, err := req.connectHardware(handle, loc)
 	if err != nil {
-		return fmt.Errorf("IOControl: DeviceIoControl failed: %w", err)
+		return fmt.Errorf("IOControl: DeviceIoControl failed (usbip-win2 0.9.8.1+ required): %w", err)
 	}
 
 	logger.Debug("IOCTL completed", "bytesReturned", bytesReturned, "portOutput", portOutput)
 
-	if portOutput <= 0 {
+	if bytesReturned < 8 || portOutput <= 0 {
 		return fmt.Errorf("ResponseValidation: invalid USB port returned: %d", portOutput)
 	}
 
@@ -208,31 +190,6 @@ func attachViaIOCTL(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usb
 		"busID", deviceExportMeta.BusId,
 		"deviceID", deviceExportMeta.DevId,
 		"usbPort", portOutput)
-
-	return nil
-}
-
-func attachViaCommand(ctx context.Context, deviceExportMeta *usbip.ExportMeta, usbipServerPort uint16, logger *slog.Logger) error {
-	logger.Info("Auto-attaching localhost client", "busID", deviceExportMeta.BusId, "deviceID", deviceExportMeta.DevId)
-
-	cmd := exec.CommandContext(
-		ctx,
-		"usbip",
-		"--tcp-port",
-		strconv.FormatUint(uint64(usbipServerPort), 10),
-		"attach",
-		"-r", "localhost",
-		"-b", fmt.Sprintf("%d-%d", deviceExportMeta.BusId, deviceExportMeta.DevId),
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		logger.Error("Failed to attach device",
-			"error", err,
-			"port", usbipServerPort,
-			"output", string(output))
-		return err
-	}
-	logger.Debug("usbip attach output", "output", string(output))
 
 	return nil
 }
@@ -281,9 +238,15 @@ func getDeviceInterfacePath(guid *windows.GUID) (string, error) {
 		uintptr(unsafe.Pointer(&requiredSize)),
 		0)
 
+	if requiredSize < 6 {
+		return "", fmt.Errorf("Discovery: invalid device interface detail size: %d", requiredSize)
+	}
 	detailData := make([]byte, requiredSize)
 	detailHeader := (*SP_DEVICE_INTERFACE_DETAIL_DATA)(unsafe.Pointer(&detailData[0]))
-	detailHeader.CbSize = uint32(unsafe.Sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA{}))
+	detailHeader.CbSize = 6
+	if unsafe.Sizeof(uintptr(0)) == 8 {
+		detailHeader.CbSize = 8
+	}
 
 	r2, _, e3 := syscall.SyscallN(procSetupDiGetDeviceInterfaceDetailW.Addr(),
 		uintptr(devInfo),
@@ -305,28 +268,9 @@ func getDeviceInterfacePath(guid *windows.GUID) (string, error) {
 }
 
 func CheckAutoAttachPrerequisites(useNativeIOCTL bool, logger *slog.Logger) bool {
-	if useNativeIOCTL {
-		_, err := getDeviceInterfacePath(&deviceGUID)
-		if err != nil {
-			logger.Warn("usbip-win2 driver not found or not installed")
-			logger.Warn("Native IOCTL auto-attach requires the usbip-win2 driver")
-			logger.Info("Download and install usbip-win2:")
-			logger.Info("  https://github.com/vadimgrn/usbip-win2")
-			logger.Info("  https://github.com/OSSign/vadimgrn--usbip-win2")
-			return false
-		}
-		logger.Debug("usbip-win2 driver found")
-		return true
-	}
-
-	if _, err := exec.LookPath("usbip.exe"); err != nil {
-		logger.Warn("USB/IP tool 'usbip.exe' not found in PATH")
-		logger.Warn("Auto-attach requires usbip-win2")
-		logger.Info("Download and install usbip-win2:")
-		logger.Info("  https://github.com/vadimgrn/usbip-win2")
+	if _, err := getDeviceInterfacePath(&deviceGUID); err != nil {
+		logger.Warn("Auto-attach requires the usbip-win2 0.9.8.1+ driver", "error", err)
 		return false
 	}
-
-	logger.Debug("usbip.exe tool found in PATH")
 	return true
 }
