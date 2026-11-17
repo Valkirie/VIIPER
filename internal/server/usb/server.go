@@ -172,6 +172,8 @@ type Server struct {
 	rawLogger log.RawLogger
 	busses    map[uint32]*virtualbus.VirtualBus
 	busesMu   sync.Mutex
+	imports   map[usb.Device]net.Conn // guarded by busesMu; keyed by device instance, not reusable bus ID
+	closed    bool
 	ready     chan struct{}
 	readyOnce sync.Once
 	ln        net.Listener
@@ -183,6 +185,7 @@ func New(config ServerConfig, logger *slog.Logger, rawLogger log.RawLogger) *Ser
 		logger:    logger,
 		rawLogger: rawLogger,
 		busses:    make(map[uint32]*virtualbus.VirtualBus),
+		imports:   make(map[usb.Device]net.Conn),
 		ready:     make(chan struct{}),
 	}
 }
@@ -319,8 +322,15 @@ func (s *Server) ListenAndServe() error {
 	if err != nil {
 		return err
 	}
+	s.busesMu.Lock()
+	if s.closed {
+		s.busesMu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	s.ln = ln
 	s.config.Addr = ln.Addr().String()
+	s.busesMu.Unlock()
 	s.readyOnce.Do(func() { close(s.ready) })
 	s.logger.Info("USBIP server listening", "addr", s.config.Addr)
 	for {
@@ -355,12 +365,31 @@ func (s *Server) ListenAndServe() error {
 // to its listen address and is ready to accept connections.
 func (s *Server) Ready() <-chan struct{} { return s.ready }
 
-// Close stops the USB server by closing its listener.
+// Close stops the listener and active imports.
 func (s *Server) Close() error {
-	if s.ln != nil {
-		return s.ln.Close()
+	s.busesMu.Lock()
+	s.closed = true
+	ln := s.ln
+	conns := make([]net.Conn, 0, len(s.imports))
+	for _, conn := range s.imports {
+		conns = append(conns, conn)
+	}
+	s.busesMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+	if ln != nil {
+		return ln.Close()
 	}
 	return nil
+}
+
+func (s *Server) releaseImport(dev usb.Device, conn net.Conn) {
+	s.busesMu.Lock()
+	if s.imports[dev] == conn {
+		delete(s.imports, dev)
+	}
+	s.busesMu.Unlock()
 }
 
 // GetListenPort extracts and returns the port number from the server's listen address.
@@ -406,6 +435,7 @@ func (s *Server) handleConn(conn net.Conn) error {
 			if err != nil {
 				return fmt.Errorf("handle import: %w", err)
 			}
+			defer s.releaseImport(dev, conn)
 			return s.handleUrbStream(conn, dev)
 		}
 	}
@@ -460,25 +490,54 @@ func (s *Server) handleImport(conn net.Conn, first8 []byte) (usb.Device, error) 
 	if err := usbip.ReadExactly(conn, rest[:]); err != nil {
 		return nil, fmt.Errorf("read import busid: %w", err)
 	}
-	reqBus := string(rest[:bytes.IndexByte(rest[:], 0)])
+	end := bytes.IndexByte(rest[:], 0)
+	if end < 0 {
+		return nil, fmt.Errorf("unterminated import busid")
+	}
+	reqBus := string(rest[:end])
 	s.logger.Info("Import request", "busid", reqBus)
 	var chosen usb.Device
 	var chosenMeta *usbip.ExportMeta
 	var chosenDesc *usb.Descriptor
-	for _, m := range s.getAllDeviceMetas() {
-		meta := m.Meta
-		end := bytes.IndexByte(meta.USBBusId[:], 0)
-		bid := string(meta.USBBusId[:end])
-		if bid == reqBus {
-			chosen = m.Dev
-			chosenMeta = &meta
-			chosenDesc = m.Dev.GetDescriptor()
-			break
+	var deviceCtx context.Context
+	s.busesMu.Lock()
+	for _, bus := range s.busses {
+		for _, m := range bus.GetAllDeviceMetas() {
+			meta := m.Meta
+			end := bytes.IndexByte(meta.USBBusId[:], 0)
+			if end >= 0 && string(meta.USBBusId[:end]) == reqBus {
+				chosen = m.Dev
+				chosenMeta = &meta
+				chosenDesc = m.Dev.GetDescriptor()
+				deviceCtx = bus.GetDeviceContext(m.Dev)
+				break
+			}
 		}
 	}
-	if chosen == nil || chosenMeta == nil || chosenDesc == nil {
-		return nil, fmt.Errorf("no device matches busid %s", reqBus)
+	status := uint32(0)
+	if s.closed || chosen == nil || chosenMeta == nil || chosenDesc == nil || deviceCtx == nil {
+		status = 4 // ST_NODEV
+	} else if s.imports[chosen] != nil {
+		status = 2 // ST_DEV_BUSY
+	} else {
+		s.imports[chosen] = conn
 	}
+	s.busesMu.Unlock()
+	if status != 0 {
+		rep := usbip.MgmtHeader{Version: usbip.Version, Command: usbip.OpRepImport, Status: status}
+		if err := rep.Write(conn); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("import %s rejected: status %d", reqBus, status)
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			s.releaseImport(chosen, conn)
+		}
+	}()
+	stop := context.AfterFunc(deviceCtx, func() { _ = conn.Close() })
+	defer stop()
 	var buf bytes.Buffer
 	rep := usbip.MgmtHeader{Version: usbip.Version, Command: usbip.OpRepImport, Status: 0}
 	_ = rep.Write(&buf)
@@ -506,6 +565,7 @@ func (s *Server) handleImport(conn net.Conn, first8 []byte) (usb.Device, error) 
 	if _, err := conn.Write(buf.Bytes()); err != nil {
 		return nil, fmt.Errorf("write import reply failed: %w", err)
 	}
+	accepted = true
 	return chosen, nil
 }
 
@@ -569,6 +629,7 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 	}
 
 	var owningBus *virtualbus.VirtualBus
+	s.busesMu.Lock()
 	for _, b := range s.busses {
 		devices := b.Devices()
 		for _, d := range devices {
@@ -581,6 +642,7 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 			break
 		}
 	}
+	s.busesMu.Unlock()
 	if owningBus == nil {
 		return fmt.Errorf("device does not belong to any bus")
 	}
@@ -589,6 +651,8 @@ func (s *Server) handleUrbStream(conn net.Conn, dev usb.Device) error {
 	if ctx == nil {
 		return fmt.Errorf("no device context available from bus")
 	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 
 	// Data-driven completion plumbing (ported from upstream 7e33d2d3):
 	// interrupt-IN URBs are completed asynchronously when the device has
